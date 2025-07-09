@@ -1,0 +1,601 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = [
+#   "blessed >= 1.21.0",
+# ]
+# ///
+"""
+Tmux Pane Text Capture and Selection Tool
+
+This tool captures content from the current tmux pane, finds text patterns
+(URLs, git commits, emails, GitHub repositories, IP addresses with optional ports,
+file paths, MAC addresses, UUIDs, hex colors, markdown links, git diff files,
+Docker SHA256 hashes, IPv6 addresses, memory addresses, IPFS hashes, and large numbers),
+and provides an interactive interface for selecting and copying text to the clipboard.
+
+Features:
+- Pattern matching for URLs, git commits, emails, GitHub repositories, IP addresses
+  with optional ports, file paths, MAC addresses, UUIDs, hex colors, markdown links,
+  git diff files, Docker SHA256 hashes, IPv6 addresses, memory addresses, IPFS hashes,
+  and large numbers
+- Interactive hint-based selection system with vim-friendly homerow keys
+- Support for multiple keyboard layouts (qwerty, azerty, qwertz, dvorak, colemak)
+- Cross-platform clipboard support (macOS, Linux)
+- Gruvbox-style color theming
+- ANSI escape sequence handling for styled terminal output
+
+Usage:
+    tmuxcapture
+
+Requirements:
+    - tmux running with active pane
+    - blessed library for terminal UI
+    - Platform-specific clipboard utilities (pbcopy/xclip/xsel)
+"""
+
+import subprocess
+import re
+import sys
+import string
+import blessed
+from typing import Dict, List, Tuple, Optional
+
+
+# --- Global Color Configuration (Gruvbox Style) ---
+class ColorConfig:
+    MATCH_HIGHLIGHT_BG = "#458588"
+    HINT_DEFAULT_FG = "#282828"
+    HINT_DEFAULT_BG = "#fabd2f"
+    HINT_TYPED_FG = "#fbf1c7"
+    HINT_TYPED_BG = "#fb4934"
+    HINT_PENDING_FG = "#282828"
+    HINT_PENDING_BG = "#fabd2f"
+    HINT_INACTIVE_FG = "#928374"
+    HINT_INACTIVE_BG = "#3c3836"
+
+
+# --- Alphabet Configuration ---
+ALPHABETS = {
+    "numeric": "1234567890",
+    "abcd": "abcd",
+    "vim": "hjklasdfzxcvbnmqwertyuiop",
+    "vim-homerow": "hjklasdfg",
+    "vim-movement": "hjklwbef",
+    "qwerty": "asdfqwerzxcvjklmiuopghtybn",
+    "qwerty-homerow": "asdfjklgh",
+    "qwerty-left-hand": "asdfqwerzcxv",
+    "qwerty-right-hand": "jkluiopmyhn",
+    "azerty": "qsdfazerwxcvjklmuiopghtybn",
+    "azerty-homerow": "qsdfjkmgh",
+    "azerty-left-hand": "qsdfazerwxcv",
+    "azerty-right-hand": "jklmuiophyn",
+    "qwertz": "asdfqweryxcvjkluiopmghtzbn",
+    "qwertz-homerow": "asdfghjkl",
+    "qwertz-left-hand": "asdfqweryxcv",
+    "qwertz-right-hand": "jkluiopmhzn",
+    "dvorak": "aoeuqjkxpyhtnsgcrlmwvzfidb",
+    "dvorak-homerow": "aoeuhtnsid",
+    "dvorak-left-hand": "aoeupqjkyix",
+    "dvorak-right-hand": "htnsgcrlmwvz",
+    "colemak": "arstqwfpzxcvneioluymdhgjbk",
+    "colemak-homerow": "arstneiodh",
+    "colemak-left-hand": "arstqwfpzxcv",
+    "colemak-right-hand": "neioluymjhk",
+}
+
+# Default to vim movement keys
+DEFAULT_ALPHABET = "vim-movement"
+
+# --- Regular Expression Patterns ---
+REGEX_PATTERNS = {
+    "GIT_COMMIT": r"\b[0-9a-f]{7,40}\b",
+    "URL": r"(?:https?://|git@|git://|ssh://|ftp://|file:///)[^ ]+",
+    "EMAIL": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
+    "GITHUB_REPO": r"(?:https?://github\.com/|git@github\.com:|ssh@github\.com:)[-a-zA-Z0-9_]+/(?:[-a-zA-Z0-9_]|\.)+(?:\.git)?",
+    "IP_ADDRESS": r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\b",
+    "FILE_PATH": r"(?:[.\w\-@$~\[\]]+)?(?:/[.\w\-@$\[\]]+)+",
+    "MAC_ADDRESS": r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b",
+    "UUID": r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    "HEX_COLOR": r"#[0-9a-fA-F]{6}\b",
+    "MARKDOWN_URL": r"\[[^\]]*\]\(([^)]+)\)",
+    "DIFF_SUMMARY": r"diff --git a/([^ ]+) b/([^ ]+)",
+    "DIFF_A": r"--- a/([^ ]+)",
+    "DIFF_B": r"\+\+\+ b/([^ ]+)",
+    "DOCKER_SHA": r"sha256:([0-9a-f]{64})",
+    "IPV6": r"[A-f0-9:]+:+[A-f0-9:]+[%\w\d]*",
+    "HEX_ADDRESS": r"0x[0-9a-fA-F]+",
+    "IPFS_HASH": r"\bQm[0-9a-zA-Z]{44}\b",
+    "LARGE_NUMBER": r"\b[0-9]{4,}\b",
+}
+
+
+# --- Helper Functions ---
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert #RRGGBB format hex color string to (r, g, b) tuple."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        raise ValueError("Invalid hex color format")
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def calculate_visual_positions(
+    line_with_ansi: str, term: blessed.Terminal
+) -> dict[int, int]:
+    """Calculate mapping from visual column positions to character indices.
+
+    ANSI escape sequences don't occupy visual space but do take up character positions.
+    This function creates a mapping to convert between visual positions (for display)
+    and raw character indices (for text extraction).
+
+    Args:
+        line_with_ansi: Raw line string containing ANSI escape sequences
+        term: blessed.Terminal instance for character length calculation
+
+    Returns:
+        Dictionary mapping visual column positions to character indices
+    """
+    visual_pos_cache = {}
+    visual_col = 0
+    char_idx = 0
+
+    # Scan through line character by character to build position mapping
+    while char_idx < len(line_with_ansi):
+        char = line_with_ansi[char_idx]
+        if char == "\x1b":  # ANSI escape sequence start
+            # Match full ANSI sequence (e.g., \x1b[31m for red color)
+            match = re.match(r"\x1b\[[0-9;]*m", line_with_ansi[char_idx:])
+            if match:
+                char_idx += len(match.group(0))  # Skip entire sequence
+                continue
+
+        # Map visual position to character index for visible characters
+        visual_pos_cache[visual_col] = char_idx
+        visual_col += term.length(line_with_ansi[char_idx : char_idx + 1])
+        char_idx += 1
+
+    return visual_pos_cache
+
+
+def determine_hint_style(
+    hint: str,
+    current_input: str,
+    style_default: str,
+    style_typed: str,
+    style_pending: str,
+    style_inactive: str,
+    term_normal: str,
+) -> str:
+    """Determine the appropriate styling for a hint based on user input.
+
+    Args:
+        hint: The hint string to style
+        current_input: Current user input string
+        style_default: Default hint style (no input)
+        style_typed: Style for typed portion of hint
+        style_pending: Style for pending portion of hint
+        style_inactive: Style for inactive hints
+        term_normal: Terminal normal style reset
+
+    Returns:
+        Styled hint string ready for display
+    """
+    if not current_input:
+        # No input yet - show all hints in default style
+        return style_default + hint + term_normal
+    elif hint.startswith(current_input):
+        # Hint matches current input - split into typed and pending parts
+        typed_part = current_input
+        pending_part = hint[len(typed_part) :]
+        return style_typed + typed_part + style_pending + pending_part + term_normal
+    else:
+        # Hint doesn't match current input - show as inactive
+        return style_inactive + hint + term_normal
+
+
+def is_valid_hint_input(
+    current_input: str, hint_to_match: dict[str, dict]
+) -> tuple[bool, bool]:
+    """Check if current input is valid and determine if selection should be made.
+
+    Args:
+        current_input: Current user input string
+        hint_to_match: Dictionary mapping hints to match objects
+
+    Returns:
+        Tuple of (input_has_matches, should_select)
+        - input_has_matches: True if input matches at least one hint prefix
+        - should_select: True if input exactly matches a hint and is not a prefix of others
+    """
+    # Check if any hints start with current input
+    input_has_matches = any(h.startswith(current_input) for h in hint_to_match)
+
+    # Check if input matches exactly and is not a prefix of others
+    should_select = False
+    if current_input in hint_to_match:
+        is_prefix_of_others = any(
+            h.startswith(current_input) and h != current_input for h in hint_to_match
+        )
+        should_select = not is_prefix_of_others
+
+    return input_has_matches, should_select
+
+
+def group_matches_by_content(matches: list[dict]) -> dict[str, list[dict]]:
+    """Group matches by their text content to reduce hint count.
+
+    Args:
+        matches: List of match dictionaries with text, position, and styling info
+
+    Returns:
+        Dictionary mapping text content to list of match dictionaries
+    """
+    content_groups = {}
+    for match in matches:
+        content = match["text"]
+        if content not in content_groups:
+            content_groups[content] = []
+        content_groups[content].append(match)
+    return content_groups
+
+
+def find_text_matches(
+    lines_with_ansi: list[str], patterns: dict[str, str], term: blessed.Terminal
+) -> list[dict]:
+    """Find all text pattern matches in tmux pane lines.
+
+    Searches for regex patterns in ANSI-stripped lines while preserving
+    the original styled segments for display purposes.
+
+    Args:
+        lines_with_ansi: List of raw lines with ANSI escape sequences
+        patterns: Dictionary of pattern names to regex strings
+        term: blessed.Terminal instance for ANSI processing
+
+    Returns:
+        List of match dictionaries with text, position, and styling info
+    """
+    found_matches = []
+
+    for line_idx, line_with_ansi in enumerate(lines_with_ansi):
+        clean_line = term.strip_seqs(
+            line_with_ansi
+        )  # Remove ANSI sequences for pattern matching
+
+        # Create mapping from visual column positions to character indices
+        visual_pos_cache = calculate_visual_positions(line_with_ansi, term)
+
+        # Search for all regex patterns in the cleaned line
+        for pattern_name, pattern_str in patterns.items():
+            for m in re.finditer(pattern_str, clean_line):
+                start_col, end_col = m.start(), m.end()
+
+                # Map visual positions back to raw character indices
+                ansi_start_idx = visual_pos_cache.get(start_col)
+                ansi_end_idx = visual_pos_cache.get(end_col)
+                if ansi_end_idx is None:
+                    # If end position not found, use end of line
+                    ansi_end_idx = visual_pos_cache.get(
+                        len(clean_line), len(line_with_ansi)
+                    )
+
+                if ansi_start_idx is None:
+                    continue  # Skip if start position not found
+
+                # Extract original segment with ANSI formatting preserved
+                original_styled_segment = line_with_ansi[ansi_start_idx:ansi_end_idx]
+                found_matches.append(
+                    {
+                        "text": m.group(0),
+                        "line_idx": line_idx,
+                        "start_col": start_col,
+                        "end_col": end_col,
+                        "pattern": pattern_name,
+                        "original_styled_segment": original_styled_segment,
+                    }
+                )
+
+    return found_matches
+
+
+def generate_hints(count: int, alphabet_key: str = DEFAULT_ALPHABET) -> list[str]:
+    """Generate keyboard hints for text selection using vim movement keys.
+
+    Creates a series of single and multi-character hints using the specified alphabet.
+    Prioritizes vim movement keys (hjkl) and word movement keys (wbef) for efficient navigation.
+    Generates hints in order: h, j, k, l, w, b, e, f, hh, hj, hk, hl, ...
+
+    Args:
+        count: Number of hints to generate
+        alphabet_key: Key from ALPHABETS dict to use for hint generation
+
+    Returns:
+        List of hint strings in generation order
+
+    Example:
+        >>> generate_hints(5)
+        ['h', 'j', 'k', 'l', 'w']
+        >>> generate_hints(10, "vim-movement")
+        ['h', 'j', 'k', 'l', 'w', 'b', 'e', 'f', 'hh', 'hj']
+    """
+    hints = []
+    alphabet = ALPHABETS.get(alphabet_key, ALPHABETS[DEFAULT_ALPHABET])
+
+    # Generate single character hints first
+    for char in alphabet:
+        if len(hints) >= count:
+            break
+        hints.append(char)
+
+    # Generate multi-character hints if needed
+    if len(hints) < count:
+        # Create queue for multi-character combinations
+        q = [(char,) for char in alphabet]
+        while q and len(hints) < count:
+            current_hint_tuple = q.pop(0)
+            hint = "".join(current_hint_tuple)
+            if hint not in hints:  # Avoid duplicates
+                hints.append(hint)
+
+            # Add longer combinations if we haven't reached the limit
+            if len(current_hint_tuple) < 3:  # Limit to 3 characters max
+                for char in alphabet:
+                    q.append(current_hint_tuple + (char,))
+
+    return hints[:count]
+
+
+def get_tmux_pane_content(pane_id: str = None) -> list[str]:
+    """Capture the content of the specified tmux pane.
+
+    Executes 'tmux capture-pane -p -e -J' to get the pane content with:
+    - -p: Print to stdout
+    - -e: Include escape sequences
+    - -J: Join wrapped lines
+    - -t: Target pane (if specified)
+
+    Args:
+        pane_id: Target pane ID (e.g., "%1"). If None, captures current pane.
+
+    Returns:
+        List of lines from the tmux pane, or error messages if capture fails
+    """
+    try:
+        cmd = ["tmux", "capture-pane", "-p", "-e", "-J"]
+        if pane_id:
+            cmd.extend(["-t", pane_id])
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, check=True, encoding="utf-8"
+        )
+        return result.stdout.splitlines()
+    except FileNotFoundError:
+        return ["Error: 'tmux' command not found."]
+    except subprocess.CalledProcessError as e:
+        return [f"Error capturing tmux pane: {e.stderr}"]
+
+
+def assign_hints_to_groups(
+    content_groups: dict[str, list[dict]], alphabet_key: str = DEFAULT_ALPHABET
+) -> dict[str, str]:
+    """Assign hints to content groups efficiently.
+
+    Args:
+        content_groups: Dictionary mapping text content to list of matches
+        alphabet_key: Key from ALPHABETS dict to use for hint generation
+
+    Returns:
+        Dictionary mapping text content to assigned hint
+    """
+    unique_contents = list(content_groups.keys())
+    hints = generate_hints(len(unique_contents), alphabet_key)
+    return dict(zip(unique_contents, hints))
+
+
+def run_blessed_app(
+    term: blessed.Terminal, original_ansi_lines: list[str], matches_info: list[dict]
+) -> str | None:
+    """Run the interactive terminal UI for text selection.
+
+    Displays the tmux pane content with highlighted matches and interactive hints.
+    Users can type hint characters to select text for copying.
+
+    Args:
+        term: blessed.Terminal instance
+        original_ansi_lines: List of original pane lines with ANSI codes
+        matches_info: List of match dictionaries with hint, text, position info
+
+    Returns:
+        Selected text string if user made a selection, None if cancelled
+    """
+    # Group matches by content and assign hints
+    content_groups = group_matches_by_content(matches_info)
+    content_to_hint = assign_hints_to_groups(content_groups)
+
+    # Add hints to all matches based on their content
+    for match in matches_info:
+        match["hint"] = content_to_hint[match["text"]]
+
+    # Create lookup dictionary for quick hint-to-content mapping
+    hint_to_content = {hint: content for content, hint in content_to_hint.items()}
+
+    color_config = ColorConfig
+    try:
+        # Pre-compute all terminal style strings for better performance
+        style_match_highlight = term.on_color_rgb(
+            *hex_to_rgb(color_config.MATCH_HIGHLIGHT_BG)
+        )
+        style_hint_default = term.color_rgb(
+            *hex_to_rgb(color_config.HINT_DEFAULT_FG)
+        ) + term.on_color_rgb(*hex_to_rgb(color_config.HINT_DEFAULT_BG))
+        style_hint_typed = (
+            term.bold
+            + term.color_rgb(*hex_to_rgb(color_config.HINT_TYPED_FG))
+            + term.on_color_rgb(*hex_to_rgb(color_config.HINT_TYPED_BG))
+        )
+        style_hint_pending = term.color_rgb(
+            *hex_to_rgb(color_config.HINT_PENDING_FG)
+        ) + term.on_color_rgb(*hex_to_rgb(color_config.HINT_PENDING_BG))
+        style_hint_inactive = (
+            term.dim
+            + term.color_rgb(*hex_to_rgb(color_config.HINT_INACTIVE_FG))
+            + term.on_color_rgb(*hex_to_rgb(color_config.HINT_INACTIVE_BG))
+        )
+    except ValueError as e:
+        print(f"Color configuration error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Enter fullscreen interactive mode
+    with term.fullscreen(), term.cbreak(), term.hidden_cursor():
+        current_hint_input = ""
+        selected_text = None
+        while True:
+            # Clear screen and redraw original pane content
+            print(term.clear + "\n".join(original_ansi_lines), end="")
+
+            # Draw all matches with highlights and hints
+            for match in matches_info:
+                x, y = match["start_col"], match["line_idx"]
+                if not (y < term.height and x < term.width):
+                    continue  # Skip matches outside visible area
+
+                # Apply highlighting style using string concatenation
+                highlighted_segment = (
+                    style_match_highlight
+                    + match["original_styled_segment"]
+                    + term.normal
+                )
+                print(term.move_xy(x, y) + highlighted_segment, end="")
+
+                hint = match["hint"]
+                # Use pure function to determine hint styling
+                hint_display = determine_hint_style(
+                    hint,
+                    current_hint_input,
+                    style_hint_default,
+                    style_hint_typed,
+                    style_hint_pending,
+                    style_hint_inactive,
+                    term.normal,
+                )
+                print(term.move_xy(x, y) + hint_display, end="")
+
+            sys.stdout.flush()
+
+            # Check if current input should trigger selection
+            input_has_matches, should_select = is_valid_hint_input(
+                current_hint_input, hint_to_content
+            )
+            if should_select:
+                selected_text = hint_to_content[current_hint_input]
+                break
+
+            # Handle keyboard input
+            key = term.inkey()
+            if key.is_sequence:
+                if key.name in ("KEY_ESCAPE", "KEY_CTRL_C"):
+                    break  # Exit without selection
+                if key.name == "KEY_BACKSPACE":
+                    current_hint_input = current_hint_input[
+                        :-1
+                    ]  # Remove last character
+            elif not key.is_sequence and key:
+                current_hint_input += key.lower()  # Add character to input
+                # Exit if no hints start with current input
+                input_has_matches, _ = is_valid_hint_input(
+                    current_hint_input, hint_to_content
+                )
+                if not input_has_matches:
+                    break
+    return selected_text
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """Copy text to system clipboard using platform-specific commands.
+
+    Supports macOS (pbcopy) and Linux (xclip/xsel) clipboard utilities.
+
+    Args:
+        text: Text string to copy to clipboard
+
+    Returns:
+        True if copy operation succeeded, False otherwise
+    """
+    if not text:
+        return False
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
+        elif sys.platform.startswith("linux"):
+            try:
+                subprocess.run(
+                    ["xclip", "-selection", "clipboard"],
+                    input=text.encode("utf-8"),
+                    check=True,
+                )
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                subprocess.run(
+                    ["xsel", "--clipboard", "--input"],
+                    input=text.encode("utf-8"),
+                    check=True,
+                )
+        else:
+            return False  # Unsupported platform
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+def main() -> None:
+    """Main entry point for the tmux text capture and selection tool.
+
+    Captures tmux pane content, finds text patterns (URLs, git commits, emails,
+    IP addresses with optional ports, file paths, MAC addresses, UUIDs, hex colors,
+    markdown links, git diff files, Docker SHA256 hashes, IPv6 addresses, memory addresses,
+    IPFS hashes, and large numbers), displays an interactive interface for selection,
+    and copies chosen text to clipboard.
+
+    Accepts optional pane ID as command line argument.
+    """
+    try:
+        subprocess.run(
+            ["tmux", "display-message", "-p", "#S"], check=True, capture_output=True
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("Error: tmux is not running or not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Get target pane ID from command line argument if provided
+    target_pane = sys.argv[1] if len(sys.argv) > 1 else None
+
+    original_ansi_lines = get_tmux_pane_content(target_pane)
+    if not original_ansi_lines or original_ansi_lines[0].startswith("Error:"):
+        if len(original_ansi_lines) > 0:
+            print(original_ansi_lines[0], file=sys.stderr)
+        sys.exit(1)
+
+    term = blessed.Terminal()
+
+    # Find all text matches using the extracted pure function
+    found_matches = find_text_matches(original_ansi_lines, REGEX_PATTERNS, term)
+
+    if not found_matches:
+        print("No matches found in the target pane.", file=sys.stderr)
+        sys.exit(0)
+
+    # Hints are now assigned inside run_blessed_app based on content grouping
+    selected_text = run_blessed_app(term, original_ansi_lines, found_matches)
+
+    if selected_text:
+        if copy_to_clipboard(selected_text):
+            print(f"Copied '{selected_text}' to clipboard.")
+        else:
+            print(
+                "Failed to copy to clipboard. Ensure xclip or xsel is installed on Linux.",
+                file=sys.stderr,
+            )
+    else:
+        print("Operation cancelled.")
+
+
+if __name__ == "__main__":
+    main()

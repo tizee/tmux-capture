@@ -1,0 +1,15 @@
+# tmux.conf.example
+# Add these lines to your ~/.tmux.conf file to enable tmux-capture window
+
+# Set the path to your tmux-capture-window.sh script
+# Update this path to match your actual installation location
+TMUX_CAPTURE_SCRIPT="/Users/tizee/projects/project-python/tizee-packages/tmux-capture/tmux-capture-window.sh"
+
+# Bind key combination to launch capture in new window
+# This binds Prefix + y to launch the capture tool
+bind-key y run-shell "$TMUX_CAPTURE_SCRIPT"
+
+# Alternative key bindings (choose one that works for you):
+# bind-key C-y run-shell "$TMUX_CAPTURE_SCRIPT"  # Prefix + Ctrl+y
+# bind-key -n M-y run-shell "$TMUX_CAPTURE_SCRIPT"  # Alt+y (no prefix needed)
+# bind-key -n F12 run-shell "$TMUX_CAPTURE_SCRIPT"  # F12 key (no prefix needed)
