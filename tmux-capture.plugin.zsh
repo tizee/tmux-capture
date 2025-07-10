@@ -15,6 +15,7 @@ tmux-capture-widget() {
     # Check if we're in a tmux session
     if [[ -n "$TMUX" ]]; then
         # Inside tmux - use the window script for better integration
+        # Show output and wait for user confirmation in tmux environment
         local window_script="$TMUX_CAPTURE_DIR/tmux-capture-window.sh"
         if [[ -f "$window_script" ]]; then
             "$window_script"
@@ -23,10 +24,41 @@ tmux-capture-widget() {
             "$TMUX_CAPTURE_SCRIPT"
         fi
     else
-        # Outside tmux - show error message
-        echo "Error: tmux-capture requires a tmux session"
-        echo "Start tmux first: tmux new-session"
-        return 1
+        # Outside tmux - check if tmux is running and has sessions
+        if ! command -v tmux >/dev/null 2>&1; then
+            echo "Error: tmux command not found"
+            return 1
+        fi
+
+        # Check if any tmux sessions exist
+        if ! tmux list-sessions >/dev/null 2>&1; then
+            echo "Error: No tmux sessions found"
+            echo "Start tmux first: tmux new-session"
+            return 1
+        fi
+
+        # Get current tmux session's default pane
+        local current_session=$(tmux display-message -p '#S' 2>/dev/null)
+        if [[ -z "$current_session" ]]; then
+            # No current session, get the first available session
+            current_session=$(tmux list-sessions -F '#S' | head -1)
+        fi
+
+        if [[ -n "$current_session" ]]; then
+            # Get the current window and pane of the session
+            local current_pane=$(tmux list-panes -t "$current_session" -F '#{pane_id}' | head -1)
+            if [[ -n "$current_pane" ]]; then
+                # Ensure tmux-capture has access to terminal input/output
+                exec < /dev/tty
+                "$TMUX_CAPTURE_SCRIPT" "$current_pane"
+            else
+                echo "Error: No panes found in tmux session '$current_session'"
+                return 1
+            fi
+        else
+            echo "Error: Unable to determine tmux session"
+            return 1
+        fi
     fi
 }
 
@@ -41,12 +73,12 @@ tmux-capture-help() {
     echo "tmux-capture zsh plugin"
     echo ""
     echo "Usage:"
-    echo "  $TMUX_CAPTURE_HOTKEY           - Launch tmux-capture (inside tmux)"
+    echo "  $TMUX_CAPTURE_HOTKEY           - Launch tmux-capture (works inside/outside tmux)"
     echo "  tmux-capture     - Launch tmux-capture directly"
     echo ""
     echo "Configuration:"
     echo "  TMUX_CAPTURE_HOTKEY - Set hotkey (default: ^E)"
     echo "  Example: export TMUX_CAPTURE_HOTKEY='^O'"
     echo ""
-    echo "Note: All commands require an active tmux session"
+    echo "Note: Requires tmux to be running with at least one session"
 }
