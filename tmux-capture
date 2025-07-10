@@ -622,13 +622,26 @@ def run_blessed_app(
         selected_text = None
         while True:
             # Clear screen and redraw original pane content
-            print(term.clear + "\n".join(original_ansi_lines), end="")
-
+            print(term.clear, end="")
+            
+            # Calculate visible area constraints
+            visible_lines = min(len(original_ansi_lines), term.height)
+            visible_content = original_ansi_lines[:visible_lines]
+            
+            # Display only the content that fits in the terminal
+            for line_idx, line in enumerate(visible_content):
+                if line_idx < term.height:
+                    # Truncate line if it's too wide for terminal
+                    truncated_line = line[:term.width] if len(term.strip_seqs(line)) > term.width else line
+                    print(term.move_xy(0, line_idx) + truncated_line, end="")
+            
             # Draw all matches with highlights and hints
             for match in matches_info:
                 x, y = match["start_col"], match["line_idx"]
-                if not (y < term.height and x < term.width):
-                    continue  # Skip matches outside visible area
+                
+                # Skip matches outside visible area with proper bounds checking
+                if y >= visible_lines or y < 0 or x < 0 or x >= term.width:
+                    continue
 
                 # Apply highlighting style using string concatenation
                 highlighted_segment = (

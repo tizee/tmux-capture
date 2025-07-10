@@ -37,6 +37,10 @@ class MockTerminal:
             return self.inkey_sequences.pop(0)
         return ""
 
+    def strip_seqs(self, text):
+        """Strip ANSI escape sequences from text."""
+        return text.replace('<', '').replace('>', '')
+
     def fullscreen(self):
         return self # Return self to allow use in 'with' statements
 
@@ -207,3 +211,122 @@ class TestUI:
                 assert f"move_xy(10, 30)" not in printed_output
                 # Verify x_outside_match hint was not printed
                 assert f"move_xy(90, 5)" not in printed_output
+
+    def test_small_terminal_positioning(self, mock_ui_terminal):
+        """Test that overlay positioning works correctly on small terminals."""
+        # Create matches within a small terminal
+        matches = [
+            {"text": "match1", "line_idx": 2, "start_col": 5, "end_col": 11,
+             "pattern": "URL", "original_styled_segment": "match1"},
+            {"text": "match2", "line_idx": 4, "start_col": 8, "end_col": 14,
+             "pattern": "URL", "original_styled_segment": "match2"}
+        ]
+        lines = ["line 0", "line 1", "line 2 match1", "line 3", "line 4 match2", "line 5"]
+
+        # Set very small terminal dimensions
+        mock_ui_terminal.height = 5
+        mock_ui_terminal.width = 20
+
+
+        # Simulate user pressing Escape immediately
+        mock_ui_terminal.inkey_sequences = [BlessedKey('KEY_ESCAPE', is_sequence=True, name='KEY_ESCAPE')]
+
+        with patch.object(tmux_capture, 'blessed') as mock_blessed:
+            mock_blessed.Terminal.return_value = mock_ui_terminal
+            with patch('builtins.print') as mock_print:
+                tmux_capture.run_blessed_app(mock_ui_terminal, lines, matches)
+
+                # Verify all matches within terminal bounds are processed
+                printed_output = ''.join([call.args[0] for call in mock_print.call_args_list])
+                assert "match1" in printed_output
+                assert "match2" in printed_output
+
+    def test_content_truncation_on_small_screens(self, mock_ui_terminal):
+        """Test that content is properly truncated when terminal is smaller than content."""
+        # Create content that exceeds terminal width
+        long_line = "This is a very long line that exceeds the terminal width and should be truncated"
+        matches = [
+            {"text": "long", "line_idx": 0, "start_col": 10, "end_col": 14,
+             "pattern": "URL", "original_styled_segment": "long"}
+        ]
+        lines = [long_line]
+
+        # Set small terminal dimensions
+        mock_ui_terminal.height = 5
+        mock_ui_terminal.width = 20
+
+
+        # Simulate user pressing Escape immediately
+        mock_ui_terminal.inkey_sequences = [BlessedKey('KEY_ESCAPE', is_sequence=True, name='KEY_ESCAPE')]
+
+        with patch.object(tmux_capture, 'blessed') as mock_blessed:
+            mock_blessed.Terminal.return_value = mock_ui_terminal
+            with patch('builtins.print') as mock_print:
+                tmux_capture.run_blessed_app(mock_ui_terminal, lines, matches)
+
+                # Verify content is properly handled within terminal bounds
+                printed_calls = [call.args[0] for call in mock_print.call_args_list]
+                # Should contain the truncated line
+                assert any("This is a very long" in call for call in printed_calls)
+
+    def test_visible_lines_calculation(self, mock_ui_terminal):
+        """Test that visible lines are calculated correctly for different terminal sizes."""
+        # Create more lines than terminal height
+        matches = [
+            {"text": "match1", "line_idx": 1, "start_col": 0, "end_col": 6,
+             "pattern": "URL", "original_styled_segment": "match1"},
+            {"text": "match2", "line_idx": 8, "start_col": 0, "end_col": 6,
+             "pattern": "URL", "original_styled_segment": "match2"}
+        ]
+        lines = [f"line {i}" for i in range(10)]
+
+        # Set terminal height smaller than content
+        mock_ui_terminal.height = 5
+        mock_ui_terminal.width = 80
+
+
+        # Simulate user pressing Escape immediately
+        mock_ui_terminal.inkey_sequences = [BlessedKey('KEY_ESCAPE', is_sequence=True, name='KEY_ESCAPE')]
+
+        with patch.object(tmux_capture, 'blessed') as mock_blessed:
+            mock_blessed.Terminal.return_value = mock_ui_terminal
+            with patch('builtins.print') as mock_print:
+                tmux_capture.run_blessed_app(mock_ui_terminal, lines, matches)
+
+                # Verify only the first match is visible (within terminal height)
+                printed_output = ''.join([call.args[0] for call in mock_print.call_args_list])
+                assert "match1" in printed_output
+                # match2 should not be printed as it's beyond visible area
+                assert f"move_xy(0, 8)" not in printed_output
+
+    def test_negative_position_handling(self, mock_ui_terminal):
+        """Test that negative positions are properly handled."""
+        # Create matches with negative positions (edge case)
+        matches = [
+            {"text": "valid_match", "line_idx": 2, "start_col": 5, "end_col": 16,
+             "pattern": "URL", "original_styled_segment": "valid_match"},
+            {"text": "negative_y", "line_idx": -1, "start_col": 5, "end_col": 15,
+             "pattern": "URL", "original_styled_segment": "negative_y"},
+            {"text": "negative_x", "line_idx": 2, "start_col": -1, "end_col": 9,
+             "pattern": "URL", "original_styled_segment": "negative_x"}
+        ]
+        lines = ["line 0", "line 1", "line 2 valid_match"]
+
+        # Set terminal dimensions
+        mock_ui_terminal.height = 10
+        mock_ui_terminal.width = 50
+
+        # Simulate user pressing Escape immediately
+        mock_ui_terminal.inkey_sequences = [BlessedKey('KEY_ESCAPE', is_sequence=True, name='KEY_ESCAPE')]
+
+        with patch.object(tmux_capture, 'blessed') as mock_blessed:
+            mock_blessed.Terminal.return_value = mock_ui_terminal
+            with patch('builtins.print') as mock_print:
+                tmux_capture.run_blessed_app(mock_ui_terminal, lines, matches)
+
+                # Verify only the valid match was printed
+                printed_output = ''.join([call.args[0] for call in mock_print.call_args_list])
+                assert "valid_match" in printed_output
+                # Verify negative positions were not printed
+                assert f"move_xy(5, -1)" not in printed_output
+                assert f"move_xy(-1, 2)" not in printed_output
