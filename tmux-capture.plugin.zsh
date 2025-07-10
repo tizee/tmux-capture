@@ -48,8 +48,7 @@ tmux-capture-widget() {
             # Get the current window and pane of the session
             local current_pane=$(tmux list-panes -t "$current_session" -F '#{pane_id}' | head -1)
             if [[ -n "$current_pane" ]]; then
-                # Ensure tmux-capture has access to terminal input/output
-                exec < /dev/tty
+                # tmux-capture now has native terminal control - no redirection needed
                 "$TMUX_CAPTURE_SCRIPT" "$current_pane"
             else
                 echo "Error: No panes found in tmux session '$current_session'"

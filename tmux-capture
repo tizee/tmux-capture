@@ -38,6 +38,9 @@ import re
 import sys
 import string
 import math
+import os
+import termios
+import tty
 from itertools import product, islice
 import blessed
 from typing import Dict, List, Tuple, Optional
@@ -112,6 +115,70 @@ REGEX_PATTERNS = {
 
 
 # --- Helper Functions ---
+
+def ensure_terminal_control() -> bool:
+    """Ensure proper terminal control for interactive input, similar to nvim's approach.
+    
+    This function automatically detects if stdin is properly connected to an interactive
+    terminal and fixes it if necessary, making the application work reliably in all
+    environments (direct execution, tmux, shell scripts, etc.) without requiring
+    external shell redirections.
+    
+    Returns:
+        bool: True if terminal control was established successfully, False otherwise
+    """
+    try:
+        # Check if we already have a proper TTY
+        if os.isatty(sys.stdin.fileno()):
+            # Double-check: try to get terminal attributes
+            try:
+                termios.tcgetattr(sys.stdin.fileno())
+                # stdin is a real TTY with terminal attributes
+                return True
+            except (termios.error, OSError):
+                # stdin reports as TTY but doesn't have terminal attributes
+                # This can happen in some virtualized or redirected environments
+                pass
+        
+        # stdin is not a proper TTY or doesn't have terminal attributes
+        # Try to open the controlling terminal directly
+        try:
+            # Open /dev/tty for both reading and writing
+            tty_fd = os.open('/dev/tty', os.O_RDWR)
+            
+            # Verify it's actually a terminal with proper attributes
+            termios.tcgetattr(tty_fd)
+            
+            # Replace stdin with the control terminal
+            # This is the key step that makes us behave like nvim
+            os.dup2(tty_fd, sys.stdin.fileno())
+            
+            # Close the original fd since we've duplicated it
+            os.close(tty_fd)
+            
+            # Verify the replacement worked
+            if os.isatty(sys.stdin.fileno()):
+                try:
+                    termios.tcgetattr(sys.stdin.fileno())
+                    return True
+                except (termios.error, OSError):
+                    pass
+            
+        except (OSError, termios.error) as e:
+            # Failed to open /dev/tty or set terminal attributes
+            # This might happen in non-interactive environments (CI, containers, etc.)
+            print(f"Warning: Could not establish terminal control: {e}", file=sys.stderr)
+            print("The application may not respond to keyboard input properly.", file=sys.stderr)
+            return False
+    
+    except Exception as e:
+        # Unexpected error - better to continue than crash
+        print(f"Warning: Terminal control setup failed: {e}", file=sys.stderr)
+        return False
+    
+    return False
+
+
 def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     """Convert #RRGGBB format hex color string to (r, g, b) tuple."""
     hex_color = hex_color.lstrip("#")
@@ -623,22 +690,22 @@ def run_blessed_app(
         while True:
             # Clear screen and redraw original pane content
             print(term.clear, end="")
-            
+
             # Calculate visible area constraints
             visible_lines = min(len(original_ansi_lines), term.height)
             visible_content = original_ansi_lines[:visible_lines]
-            
+
             # Display only the content that fits in the terminal
             for line_idx, line in enumerate(visible_content):
                 if line_idx < term.height:
                     # Truncate line if it's too wide for terminal
                     truncated_line = line[:term.width] if len(term.strip_seqs(line)) > term.width else line
                     print(term.move_xy(0, line_idx) + truncated_line, end="")
-            
+
             # Draw all matches with highlights and hints
             for match in matches_info:
                 x, y = match["start_col"], match["line_idx"]
-                
+
                 # Skip matches outside visible area with proper bounds checking
                 if y >= visible_lines or y < 0 or x < 0 or x >= term.width:
                     continue
@@ -747,7 +814,17 @@ def main() -> None:
     and copies chosen text to clipboard.
 
     Accepts optional pane ID as command line argument.
+    
+    Features native terminal control that automatically detects and fixes stdin
+    redirection issues, making it work reliably in all environments (direct execution,
+    tmux, shell scripts) without requiring external shell redirections.
     """
+    # Establish proper terminal control before any other operations
+    # This makes the application behave like nvim - automatically handling
+    # stdin redirection and ensuring keyboard input works in all environments
+    if not ensure_terminal_control():
+        print("Warning: Running with limited terminal control.", file=sys.stderr)
+    
     try:
         subprocess.run(
             ["tmux", "display-message", "-p", "#S"], check=True, capture_output=True
@@ -765,23 +842,27 @@ def main() -> None:
             print(original_ansi_lines[0], file=sys.stderr)
         sys.exit(1)
 
+    # Create terminal instance - blessed will automatically handle terminal I/O
+    # When stdin is redirected, blessed.Terminal.inkey() will automatically
+    # open /dev/tty for keyboard input, making it work in all environments
     term = blessed.Terminal()
-
-    # Find all text matches using the extracted pure function
+    
+    # Find all text matches using the terminal instance
     found_matches = find_text_matches(original_ansi_lines, REGEX_PATTERNS, term)
 
     if not found_matches:
         print("No matches found in the target pane.", file=sys.stderr)
         sys.exit(0)
-
-    # Hints are now assigned inside run_blessed_app based on content grouping
+    
+    selected_text = None
     try:
+        # Run interactive interface - blessed handles TTY detection automatically
         selected_text = run_blessed_app(term, original_ansi_lines, found_matches)
     except KeyboardInterrupt:
         print("\nOperation cancelled.", file=sys.stderr)
         sys.exit(0)
     except Exception as e:
-        print(f"Error during interactive selection: {e}", file=sys.stderr)
+        print(f"Error during interactive session: {e}", file=sys.stderr)
         sys.exit(1)
 
     if selected_text:
