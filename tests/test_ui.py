@@ -137,27 +137,27 @@ class TestUI:
         matches = [
             {"text": f"match_{i}", "line_idx": i, "start_col": 0, "end_col": 10,
              "pattern": "URL", "original_styled_segment": f"match_{i}"}
-            for i in range(10)  # This will generate hints: h, j, k, l, w, b, e, f, hh, hj
+            for i in range(10)  # For 10 hints, the optimal set is: h, j, k, l, w, b, e, fh, fj, fk
         ]
         lines = [f"match_{i}" for i in range(10)]
 
         # Simulate user workflow:
-        # 1. Start typing 'k'
-        # 2. Realize mistake and backspace twice
-        # 3. Type 'hj' (for match_9)
+        # The hint for 'match_2' is 'k'.
+        # 1. User mistakenly types 'f' (the prefix for multi-char hints).
+        # 2. User realizes their error and hits backspace to clear the input buffer.
+        # 3. User types the correct hint 'k'.
         mock_ui_terminal.inkey_sequences = [
-            BlessedKey('h'),  # First character of hh
-            BlessedKey('KEY_BACKSPACE', is_sequence=True, name='KEY_BACKSPACE'),  # Delete second h
-            BlessedKey('h'),  # First character of hj
-            BlessedKey('j'),  # Second character of hj
+            BlessedKey('f'),  # Mistakenly start typing a multi-char hint
+            BlessedKey('KEY_BACKSPACE', is_sequence=True, name='KEY_BACKSPACE'),  # Delete 'f'
+            BlessedKey('k'),  # Type the correct hint 'k'
         ]
 
         with patch.object(tmux_capture, 'blessed') as mock_blessed:
             mock_blessed.Terminal.return_value = mock_ui_terminal
             selected_text = tmux_capture.run_blessed_app(mock_ui_terminal, lines, matches)
 
-        assert selected_text == "match_9"  # Should select the 10th match with 'hj' hint
-
+        # The app should now select the 3rd match (index 2) which has the hint 'k'.
+        assert selected_text == "match_2"
 
     def test_invalid_color_configuration(self, mock_ui_terminal):
         """Test that the app exits if color configuration is invalid."""

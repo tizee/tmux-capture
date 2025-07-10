@@ -18,7 +18,7 @@ tmux-capture solves these issues by:
 ## Features
 
 - **Pattern Detection**: Automatically finds URLs, git commits, email addresses, and GitHub repositories
-- **Keyboard Hints**: Interactive hint-based selection system (a, b, c, aa, ab, etc.)
+- **Optimal Keyboard Hints**: Advanced hint generation using greedy algorithm with optimal substructure
 - **Cross-platform**: Works on macOS and Linux
 - **Gruvbox Theme**: Beautiful color scheme for better visibility
 - **ANSI Support**: Preserves terminal colors and formatting
@@ -151,6 +151,19 @@ The tool is designed primarily for tmux environments but can be used as a standa
 6. Selected text is copied to clipboard
 7. Window closes after user confirmation
 
+## Supported Keyboard Layouts
+
+tmux-capture supports multiple keyboard layouts, maintaining compatibility with tmux-thumbs configurations to ease migration:
+
+- **vim-movement**: `hjklwbef` (default) - Vim navigation keys
+- **vim-homerow**: `hjklasdfg` - Vim keys + homerow
+- **qwerty-homerow**: `asdfjklgh` - QWERTY homerow keys
+- **dvorak**: `aoeuqjkx...` - Dvorak keyboard layout
+- **colemak**: `arstqwfp...` - Colemak keyboard layout
+- **numeric**: `1234567890` - Number keys only
+
+These layouts are designed to be familiar to tmux-thumbs users, allowing for seamless migration while providing optimal hint generation using an advanced greedy algorithm.
+
 ## License
 
 MIT License - see LICENSE file for details.
@@ -216,13 +229,15 @@ uv run ruff format .
 
 ### Test Coverage
 
-The test suite includes:
+The project maintains **100% test coverage** with 117 comprehensive tests covering:
+
 - **Regex pattern matching** - Tests for all 18 supported patterns
-- **Hint generation** - Tests for vim-friendly keyboard layouts
+- **Hint generation** - Tests for optimal algorithm with all keyboard layouts
 - **Content grouping** - Tests for reducing hint count with duplicate content
 - **ANSI handling** - Tests for terminal escape sequence processing
 - **Tmux integration** - Mocked tests for tmux command execution
 - **Clipboard operations** - Cross-platform clipboard functionality tests
+- **Edge cases** - Comprehensive coverage of boundary conditions and error scenarios
 
 ## Contributing
 

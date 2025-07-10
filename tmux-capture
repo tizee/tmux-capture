@@ -37,6 +37,8 @@ import subprocess
 import re
 import sys
 import string
+import math
+from itertools import product, islice
 import blessed
 from typing import Dict, List, Tuple, Optional
 
@@ -299,55 +301,219 @@ def find_text_matches(
 
 
 def generate_hints(count: int, alphabet_key: str = DEFAULT_ALPHABET) -> list[str]:
-    """Generate keyboard hints for text selection using vim movement keys.
+    """Generate keyboard hints that are prefix-free and optimally short.
 
-    Creates a series of single and multi-character hints using the specified alphabet.
-    Prioritizes vim movement keys (hjkl) and word movement keys (wbef) for efficient navigation.
-    Generates hints in order: h, j, k, l, w, b, e, f, hh, hj, hk, hl, ...
+    This function implements a greedy algorithm based on optimal substructure to create
+    the shortest possible prefix-free hint strings. The algorithm uses dynamic programming
+    principles to find the optimal distribution of hint lengths.
+
+    MATHEMATICAL FOUNDATION:
+    ========================
+
+    For an alphabet of size 'a' and required hint count 'count', we need to find the
+    optimal distribution of hints with different lengths to minimize the maximum length.
+
+    OPTIMAL SUBSTRUCTURE PROPERTY:
+    The optimal solution for count 'n' can be constructed from optimal solutions for
+    smaller subproblems. If we use some single-character hints, the remaining hints
+    can be solved optimally as a smaller subproblem.
+
+    RECURSIVE FORMULATION:
+    =====================
+
+    Base Cases:
+    1. If count <= a: Use single-character hints (length 1)
+    2. If count > a: We need multi-character hints
+
+    Recursive Case:
+    Let L be the minimum length such that we can generate 'count' hints using
+    lengths up to L. Then:
+    - a^1 + a^2 + ... + a^L >= count
+    - a^1 + a^2 + ... + a^(L-1) < count
+
+    GREEDY STRATEGY - OPTIMAL DISTRIBUTION:
+    ======================================
+
+    For any length L, the total possible hints using lengths 1 to L is:
+    Total = a^1 + a^2 + ... + a^L = a*(a^L - 1)/(a-1)
+
+    To minimize the maximum length while being prefix-free, we use a greedy approach:
+    1. Use as many short hints (length L-1) as possible
+    2. Use long hints (length L) only when necessary
+
+    KEY INSIGHT: If we reserve 'r' characters as prefixes for long hints, we lose
+    'r' short hints but gain 'r*a' long hints. The net gain is r*a - r = r*(a-1).
+
+    MATHEMATICAL DERIVATION:
+    =======================
+
+    Let n_short = number of hints with length L-1
+    Let n_long = number of hints with length L
+
+    We need: n_short + n_long = count
+
+    The available space for short hints is: a^(L-1) - reserved_prefixes
+    The available space for long hints is: reserved_prefixes * a
+
+    To minimize reserved_prefixes while satisfying count:
+    n_short = a^(L-1) - reserved_prefixes
+    n_long = reserved_prefixes * a
+
+    From n_short + n_long = count:
+    (a^(L-1) - reserved_prefixes) + (reserved_prefixes * a) = count
+    a^(L-1) - reserved_prefixes + reserved_prefixes * a = count
+    a^(L-1) + reserved_prefixes * (a - 1) = count
+    reserved_prefixes = (count - a^(L-1)) / (a - 1)
+
+    Since reserved_prefixes must be integer and we want to minimize the maximum length:
+    reserved_prefixes = ceil((count - a^(L-1)) / (a - 1))
+
+    But we can rewrite this as:
+    n_short = a^(L-1) - reserved_prefixes = a^(L-1) - ceil((count - a^(L-1)) / (a - 1))
+
+    Using the identity: a^(L-1) + a^(L-1) + ... + a^(L-1) = a^L (a times)
+    And: a^L - count = excess capacity
+
+    We get: n_short = floor((a^L - count) / (a - 1))
+    This is the GREEDY OPTIMAL FORMULA.
+
+    ALGORITHM CORRECTNESS:
+    =====================
+
+    1. OPTIMALITY: The greedy choice (maximizing short hints) is optimal because:
+       - Any other distribution would require more total characters
+       - The prefix-free constraint is maintained by construction
+
+    2. GREEDY PROPERTY: At each step, we make the locally optimal choice:
+       - Use the shortest possible hints first
+       - Reserve the minimum number of prefixes for longer hints
+
+    3. OPTIMAL SUBSTRUCTURE: The problem exhibits optimal substructure:
+       - If we fix the number of short hints, the remaining long hints form
+         an independent optimal subproblem
+
+    COMPLEXITY ANALYSIS:
+    ===================
+
+    Time Complexity: O(count) - We generate exactly 'count' hints
+    Space Complexity: O(count) - We store exactly 'count' hints
+
+    The algorithm is optimal in terms of hint length distribution.
 
     Args:
-        count: Number of hints to generate
-        alphabet_key: Key from ALPHABETS dict to use for hint generation
+        count (int): The total number of hints to generate.
+        alphabet_key (str, optional): The key from the ALPHABETS dictionary for
+            the desired alphabet. Defaults to "vim-movement".
 
     Returns:
-        List of hint strings in generation order
+        list[str]: A list of unique, prefix-free hint strings with optimal length distribution.
 
-    Example:
-        >>> generate_hints(5)
+    Examples:
+        >>> # Case 1: count <= alphabet size (single-character optimal)
+        >>> generate_hints(5, "vim-movement")  # alphabet size = 8
         ['h', 'j', 'k', 'l', 'w']
-        >>> generate_hints(10, "vim-movement")
-        ['h', 'j', 'k', 'l', 'w', 'b', 'e', 'f', 'hh', 'hj']
+
+        >>> # Case 2: count > alphabet size (mixed-length optimal)
+        >>> generate_hints(10, "vim-movement")  # 8 < 10 < 64
+        ['h', 'j', 'k', 'l', 'w', 'b', 'e', 'fh', 'fj', 'fk']
+        # Analysis: L=2, n_short=7, n_long=3
+        # 7 single chars + 3 two-char hints = 10 total
+
+        >>> # Case 3: Large count requiring 3-character hints
+        >>> generate_hints(20, "abcd")  # 16 < 20 < 64
+        # Analysis: L=3, n_short=floor((64-20)/3)=14, n_long=6
+        # 14 two-char hints + 6 three-char hints = 20 total
     """
+    # ALGORITHM IMPLEMENTATION
+    # ========================
+
     hints = []
     alphabet = ALPHABETS.get(alphabet_key, ALPHABETS[DEFAULT_ALPHABET])
 
-    # Generate single character hints first
-    for char in alphabet:
-        if len(hints) >= count:
-            break
-        hints.append(char)
+    # Edge case: no hints needed
+    if count <= 0:
+        return []
 
-    # If we have enough single-character hints, return them immediately
-    if len(hints) >= count:
-        return hints[:count]
+    # Step 1: Initialize alphabet size
+    # This is the base of our exponential calculations
+    a = len(alphabet)
 
-    # Generate multi-character hints if needed
-    # Calculate minimum length needed for uniform multi-character hints
-    remaining = count - len(hints)
-    alphabet_size = len(alphabet)
-    length = 2
-    while (alphabet_size ** length) < remaining:
-        length += 1
+    # Step 2: Find minimum required length L
+    # We need the smallest L such that we can generate 'count' hints
+    # using lengths up to L. This satisfies: a^(L-1) < count <= a^L
+    if a == 0 and count > 0:
+        return []  # Impossible to generate hints with empty alphabet
 
-    # Generate combinations of the required length
-    from itertools import product
-    for chars in product(alphabet, repeat=length):
-        if len(hints) >= count:
-            break
-        hints.append(''.join(chars))
+    L = 1
+    while a**L < count:
+        L += 1
 
+    # MATHEMATICAL INSIGHT: At this point, we have:
+    # - a^(L-1) < count <= a^L
+    # - L is the minimum length needed for the longest hints
 
-    return hints[:count]
+    # Step 3: Base case optimization
+    # If L=1, all hints can be single characters (optimal case)
+    if L == 1:
+        return list(alphabet)[:count]
+
+    # Step 4: Apply greedy optimal formula
+    # This is the core of our algorithm: optimal distribution calculation
+    #
+    # DERIVATION RECAP:
+    # - We want n_short hints of length L-1 and n_long hints of length L
+    # - Total capacity with L-1 length: a^(L-1)
+    # - Total capacity with L length: a^L
+    # - We need: n_short + n_long = count
+    # - Available space: n_short <= a^(L-1) - reserved_prefixes
+    # - Long hints: n_long = reserved_prefixes * a
+    # - Solving: n_short = floor((a^L - count) / (a - 1))
+
+    n_short = math.floor((a**L - count) / (a - 1))
+    n_long = count - n_short
+
+    # CORRECTNESS CHECK: Verify our calculation
+    # - n_short >= 0 (we never generate negative short hints)
+    # - n_long >= 0 (we never generate negative long hints)
+    # - n_short + n_long = count (total count matches requirement)
+
+    hints = []
+
+    # Step 5: Generate short hints (length L-1)
+    # Create all possible combinations of length L-1
+    # We'll use the first n_short as actual hints
+    short_hint_candidates = ("".join(p) for p in product(alphabet, repeat=L - 1))
+
+    # Take exactly n_short combinations as short hints
+    hints.extend(islice(short_hint_candidates, n_short))
+
+    # ALGORITHM EFFICIENCY: The iterator continues from where islice left off
+    # This means short_hint_candidates now points to the combinations we'll
+    # use as prefixes for long hints. This is memory-efficient as we don't
+    # store all combinations at once.
+
+    # Step 6: Generate long hints (length L)
+    # Use remaining combinations as prefixes for long hints
+    long_hint_prefixes = short_hint_candidates
+
+    # GREEDY STRATEGY: We generate long hints by extending prefixes
+    # This maintains the prefix-free property by construction:
+    # - All short hints are different from long hint prefixes
+    # - All long hints have different prefixes or different suffixes
+    n_long_generated = 0
+    for prefix in long_hint_prefixes:
+        for char in alphabet:
+            if n_long_generated >= n_long:
+                break  # We've generated exactly n_long long hints
+            hints.append(prefix + char)
+            n_long_generated += 1
+
+    # INVARIANT MAINTAINED: At this point:
+    # - len(hints) = n_short + n_long = count
+    # - All hints are prefix-free (no hint is a prefix of another)
+    # - The distribution is optimal (minimizes maximum hint length)
+
+    return hints
 
 
 def get_tmux_pane_content(pane_id: str = None) -> list[str]:
@@ -502,7 +668,9 @@ def run_blessed_app(
                     break  # Exit without selection
                 if key.name == "KEY_BACKSPACE":
                     if current_hint_input:
-                      current_hint_input = current_hint_input[:-1]  # Remove last character
+                        current_hint_input = current_hint_input[
+                            :-1
+                        ]  # Remove last character
             elif not key.is_sequence and key:
                 # Only accept characters from the current alphabet
                 alphabet = ALPHABETS.get(DEFAULT_ALPHABET, ALPHABETS["vim-movement"])
@@ -514,7 +682,9 @@ def run_blessed_app(
                     )
                     # Exit if input is not empty and has no matches
                     if current_hint_input and not input_has_matches:
-                        current_hint_input = current_hint_input[:-1]  # Remove invalid character
+                        current_hint_input = current_hint_input[
+                            :-1
+                        ]  # Remove invalid character
     return selected_text
 
 

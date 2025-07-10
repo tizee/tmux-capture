@@ -17,7 +17,11 @@ class TestHintGeneration:
     def test_generate_hints_vim_movement_overflow(self):
         """Test hint generation when count exceeds single character alphabet."""
         hints = tmux_capture.generate_hints(10, "vim-movement")
-        expected = ['h', 'j', 'k', 'l', 'w', 'b', 'e', 'f', 'hh', 'hj']
+
+        # For a count of 10 from an 8-char alphabet, the optimal, prefix-free
+        # distribution is 7 single-char hints and 3 two-char hints.
+        # The 'f' key is reserved as a prefix for the longer hints.
+        expected = ['h', 'j', 'k', 'l', 'w', 'b', 'e', 'fh', 'fj', 'fk']
         assert hints == expected
 
     def test_generate_hints_vim_homerow(self):
@@ -41,7 +45,12 @@ class TestHintGeneration:
     def test_generate_hints_abcd(self):
         """Test hint generation with simple abcd alphabet."""
         hints = tmux_capture.generate_hints(6, "abcd")
-        expected = ['a', 'b', 'c', 'd', 'aa', 'ab']
+
+        # For a count of 6 from a 4-char alphabet, the optimal distribution
+        # is 3 single-character hints and 3 two-character hints.
+        # n_short = floor((4^2 - 6) / (4 - 1)) = 3
+        # The 'd' key is reserved as a prefix for the longer hints.
+        expected = ['a', 'b', 'c', 'da', 'db', 'dc']
         assert hints == expected
 
     def test_generate_hints_dvorak(self):
@@ -78,13 +87,22 @@ class TestHintGeneration:
         """Test that multi-character hints are generated correctly."""
         hints = tmux_capture.generate_hints(20, "abcd")
 
-        # First 4 should be single characters
-        assert hints[:4] == ['a', 'b', 'c', 'd']
+        # For a count of 20 from a 4-char alphabet, the optimal distribution
+        # requires hints of length 2 and 3.
+        # L = 3, since 4^2 < 20 < 4^3
+        # n_short (len 2) = floor((4^3 - 20) / (4 - 1)) = 14
+        # n_long (len 3) = 20 - 14 = 6
 
-        # Next 16 should be double characters: aa, ab, ac, ad, ba, bb, bc, bd, etc.
-        expected_double = ['aa', 'ab', 'ac', 'ad', 'ba', 'bb', 'bc', 'bd',
-                          'ca', 'cb', 'cc', 'cd', 'da', 'db', 'dc', 'dd']
-        assert hints[4:] == expected_double
+        # The first 14 two-character combinations
+        expected_short = ['aa', 'ab', 'ac', 'ad', 'ba', 'bb', 'bc', 'bd',
+                          'ca', 'cb', 'cc', 'cd', 'da', 'db']
+
+        # The remaining 6 hints are length 3, using 'dc' and 'dd' as prefixes.
+        expected_long = ['dca', 'dcb', 'dcc', 'dcd', 'dda', 'ddb']
+
+        expected = expected_short + expected_long
+
+        assert hints == expected
 
     def test_generate_hints_character_limit(self):
         """Test that hints don't exceed 3 characters."""
@@ -235,3 +253,15 @@ class TestHintStylingAndValidation:
         has_matches, should_select = tmux_capture.is_valid_hint_input("a", hints)
         assert has_matches is False
         assert should_select is False
+
+    def test_generate_hints_empty_alphabet_edge_case(self):
+        """Test hint generation with empty alphabet but positive count."""
+        # Create a mock empty alphabet by temporarily modifying ALPHABETS
+        original_alphabets = tmux_capture.ALPHABETS.copy()
+        try:
+            tmux_capture.ALPHABETS["empty"] = ""
+            hints = tmux_capture.generate_hints(5, "empty")
+            assert hints == []
+        finally:
+            tmux_capture.ALPHABETS = original_alphabets
+
