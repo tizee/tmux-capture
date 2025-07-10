@@ -212,6 +212,7 @@ def is_valid_hint_input(
     # Check if input matches exactly and is not a prefix of others
     should_select = False
     if current_input in hint_to_match:
+        # Only select if input is complete hint and not a prefix
         is_prefix_of_others = any(
             h.startswith(current_input) and h != current_input for h in hint_to_match
         )
@@ -326,20 +327,25 @@ def generate_hints(count: int, alphabet_key: str = DEFAULT_ALPHABET) -> list[str
             break
         hints.append(char)
 
-    # Generate multi-character hints if needed
-    if len(hints) < count:
-        # Create queue for multi-character combinations
-        q = [(char,) for char in alphabet]
-        while q and len(hints) < count:
-            current_hint_tuple = q.pop(0)
-            hint = "".join(current_hint_tuple)
-            if hint not in hints:  # Avoid duplicates
-                hints.append(hint)
+    # If we have enough single-character hints, return them immediately
+    if len(hints) >= count:
+        return hints[:count]
 
-            # Add longer combinations if we haven't reached the limit
-            if len(current_hint_tuple) < 3:  # Limit to 3 characters max
-                for char in alphabet:
-                    q.append(current_hint_tuple + (char,))
+    # Generate multi-character hints if needed
+    # Calculate minimum length needed for uniform multi-character hints
+    remaining = count - len(hints)
+    alphabet_size = len(alphabet)
+    length = 2
+    while (alphabet_size ** length) < remaining:
+        length += 1
+
+    # Generate combinations of the required length
+    from itertools import product
+    for chars in product(alphabet, repeat=length):
+        if len(hints) >= count:
+            break
+        hints.append(''.join(chars))
+
 
     return hints[:count]
 
@@ -495,17 +501,20 @@ def run_blessed_app(
                 if key.name in ("KEY_ESCAPE", "KEY_CTRL_C"):
                     break  # Exit without selection
                 if key.name == "KEY_BACKSPACE":
-                    current_hint_input = current_hint_input[
-                        :-1
-                    ]  # Remove last character
+                    if current_hint_input:
+                      current_hint_input = current_hint_input[:-1]  # Remove last character
             elif not key.is_sequence and key:
-                current_hint_input += key.lower()  # Add character to input
-                # Exit if no hints start with current input
-                input_has_matches, _ = is_valid_hint_input(
-                    current_hint_input, hint_to_content
-                )
-                if not input_has_matches:
-                    break
+                # Only accept characters from the current alphabet
+                alphabet = ALPHABETS.get(DEFAULT_ALPHABET, ALPHABETS["vim-movement"])
+                if key.lower() in alphabet:
+                    current_hint_input += key.lower()  # Add character to input
+                    # Check if input has matches
+                    input_has_matches, _ = is_valid_hint_input(
+                        current_hint_input, hint_to_content
+                    )
+                    # Exit if input is not empty and has no matches
+                    if current_hint_input and not input_has_matches:
+                        current_hint_input = current_hint_input[:-1]  # Remove invalid character
     return selected_text
 
 
@@ -569,7 +578,7 @@ def main() -> None:
 
     original_ansi_lines = get_tmux_pane_content(target_pane)
     if not original_ansi_lines or original_ansi_lines[0].startswith("Error:"):
-        if len(original_ansi_lines) > 0:
+        if original_ansi_lines:
             print(original_ansi_lines[0], file=sys.stderr)
         sys.exit(1)
 
