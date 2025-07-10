@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tmux-capture"
-version = "0.1.2"
+version = "0.1.3"
 description = "Interactive tmux pane text capture and selection tool with vim-friendly hints"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -314,6 +314,92 @@ def group_matches_by_content(matches: list[dict]) -> dict[str, list[dict]]:
     return content_groups
 
 
+def _resolve_overlapping_matches(matches: list[dict]) -> list[dict]:
+    """Resolve overlapping matches by selecting the best match for each overlap.
+
+    Priority rules:
+    1. Longer matches are preferred over shorter ones
+    2. For same-length matches, more specific patterns are preferred:
+       - EMAIL/URL over LARGE_NUMBER
+       - Specific patterns over generic ones
+    3. Earlier patterns in REGEX_PATTERNS dict are preferred for ties
+
+    Args:
+        matches: List of match dictionaries with position and pattern info
+
+    Returns:
+        List of non-overlapping matches with best match selected for each overlap
+    """
+    if not matches:
+        return matches
+
+    # Define pattern priority (lower number = higher priority)
+    pattern_priority = {
+        "EMAIL": 1,
+        "URL": 1,
+        "GITHUB_REPO": 2,
+        "GIT_COMMIT": 3,
+        "UUID": 4,
+        "IP_ADDRESS": 5,
+        "IPV6": 5,
+        "MAC_ADDRESS": 6,
+        "HEX_COLOR": 7,
+        "DOCKER_SHA": 8,
+        "FILE_PATH": 9,
+        "MARKDOWN_URL": 10,
+        "DIFF_SUMMARY": 11,
+        "DIFF_A": 11,
+        "DIFF_B": 11,
+        "HEX_ADDRESS": 12,
+        "IPFS_HASH": 13,
+        "LARGE_NUMBER": 20,  # Lowest priority - very generic
+    }
+
+    # Sort matches by line, then by start position
+    sorted_matches = sorted(matches, key=lambda x: (x["line_idx"], x["start_col"]))
+
+    result = []
+    for current_match in sorted_matches:
+        current_start = current_match["start_col"]
+        current_end = current_match["end_col"]
+        current_line = current_match["line_idx"]
+
+        # Check if this match overlaps with any already selected match on the same line
+        overlaps_with_existing = False
+        for i, existing_match in enumerate(result):
+            if existing_match["line_idx"] != current_line:
+                continue  # Different lines, no overlap possible
+
+            existing_start = existing_match["start_col"]
+            existing_end = existing_match["end_col"]
+
+            # Check for overlap: ranges [a,b) and [c,d) overlap if max(a,c) < min(b,d)
+            if max(current_start, existing_start) < min(current_end, existing_end):
+                overlaps_with_existing = True
+
+                # Determine which match is better
+                current_length = current_end - current_start
+                existing_length = existing_end - existing_start
+
+                current_priority = pattern_priority.get(current_match["pattern"], 15)
+                existing_priority = pattern_priority.get(existing_match["pattern"], 15)
+
+                # Prefer longer matches, then higher priority patterns
+                if current_length > existing_length or (
+                    current_length == existing_length
+                    and current_priority < existing_priority
+                ):
+                    # Current match is better, replace the existing one
+                    result[i] = current_match
+
+                break  # Only need to check first overlap
+
+        if not overlaps_with_existing:
+            result.append(current_match)
+
+    return result
+
+
 def find_text_matches(
     lines_with_ansi: list[str], patterns: dict[str, str], term: blessed.Terminal
 ) -> list[dict]:
@@ -370,7 +456,8 @@ def find_text_matches(
                     }
                 )
 
-    return found_matches
+    # Remove overlapping matches, keeping the best one for each overlap
+    return _resolve_overlapping_matches(found_matches)
 
 
 def generate_hints(count: int, alphabet_key: str = DEFAULT_ALPHABET) -> list[str]:

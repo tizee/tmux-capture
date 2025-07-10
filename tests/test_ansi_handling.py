@@ -292,7 +292,7 @@ class TestAnsiHandling:
         assert patterns_found == {"URL", "EMAIL", "IP"}
     
     def test_find_text_matches_overlapping_patterns(self, mock_terminal):
-        """Test find_text_matches with overlapping pattern matches."""
+        """Test find_text_matches with overlapping pattern matches and priority resolution."""
         lines_with_ansi = [
             "Contact: user@github.com or https://github.com/user",
         ]
@@ -305,14 +305,15 @@ class TestAnsiHandling:
         
         matches = tmux_capture.find_text_matches(lines_with_ansi, patterns, mock_terminal)
         
-        # Should find all overlapping matches
-        assert len(matches) >= 3
+        # After overlap resolution, we should have 2 non-overlapping matches
+        assert len(matches) == 2
         
-        # Check that we get the expected matches
+        # Check that we get the expected matches with priority resolution
         texts = [match["text"] for match in matches]
-        assert "user@github.com" in texts
-        assert "https://github.com/user" in texts
-        assert any("github.com" in text for text in texts)
+        assert "user@github.com" in texts  # EMAIL pattern
+        assert "https://github.com/user" in texts  # URL pattern
+        
+        # Verify that EMAIL and URL patterns won over GITHUB due to higher priority/length
     def test_find_text_matches_skip_unmappable_start(self, mock_terminal):
         """Test that matches with unmappable start positions are skipped."""
         original_func = tmux_capture.calculate_visual_positions

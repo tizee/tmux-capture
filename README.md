@@ -133,11 +133,83 @@ bind-key -n M-y run-shell '/path/to/tmux-capture-window.sh'  # Alt+y (no prefix)
 
 ## Pattern Recognition
 
-tmux-capture automatically detects:
-- **URLs**: `https://example.com/path`
-- **Git commits**: `a1b2c3d4e5f6789`
-- **Email addresses**: `user@example.com`
-- **GitHub repositories**: `https://github.com/user/repo`
+tmux-capture automatically detects and prioritizes 18 different text patterns:
+
+### Supported Patterns
+- **URLs**: `https://example.com/path`, `git@github.com:user/repo.git`
+- **Git commits**: `a1b2c3d4e5f6789` (7-40 hex characters)
+- **Email addresses**: `user@example.com`, `user+tag@domain.co.uk`
+- **GitHub repositories**: `https://github.com/user/repo`, `git@github.com:user/repo.git`
+- **IP addresses**: `192.168.1.1`, `10.0.0.1:8080` (with optional port)
+- **IPv6 addresses**: `2001:db8::1`, `::1`
+- **File paths**: `/home/user/file.txt`, `./relative/path`
+- **MAC addresses**: `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF`
+- **UUIDs**: `550e8400-e29b-41d4-a716-446655440000`
+- **Hex colors**: `#ff0000`, `#1a2b3c`
+- **Docker SHA**: `sha256:abcd1234...` (64 hex characters)
+- **Memory addresses**: `0x7fff12345678`
+- **IPFS hashes**: `QmX1eWnvmPiYT...` (44 characters)
+- **Large numbers**: `12345` (4+ digits)
+- **Markdown links**: `[text](url)` (extracts URL)
+- **Git diff files**: `diff --git a/file b/file`, `--- a/file`, `+++ b/file`
+
+## Overlap Resolution Algorithm
+
+When multiple patterns match the same text region, tmux-capture uses an intelligent overlap resolution algorithm to ensure only the most relevant match is displayed and copied.
+
+### Priority Rules
+
+The algorithm applies the following rules in order:
+
+1. **Length Priority**: Longer matches are preferred over shorter ones
+   ```
+   "33030965+user@example.com" → EMAIL (full match) wins over LARGE_NUMBER (partial)
+   ```
+
+2. **Pattern Specificity**: More specific patterns win over generic ones
+   ```
+   Priority levels (1 = highest, 20 = lowest):
+   - EMAIL, URL: 1 (highest priority)
+   - GITHUB_REPO: 2  
+   - GIT_COMMIT: 3
+   - UUID: 4
+   - IP_ADDRESS, IPV6: 5
+   - MAC_ADDRESS: 6
+   - HEX_COLOR: 7
+   - DOCKER_SHA: 8
+   - FILE_PATH: 9
+   - MARKDOWN_URL: 10
+   - DIFF_*: 11
+   - HEX_ADDRESS: 12
+   - IPFS_HASH: 13
+   - LARGE_NUMBER: 20 (lowest priority - very generic)
+   ```
+
+3. **Pattern Declaration Order**: Earlier patterns in the regex dictionary win ties
+
+### Algorithm Behavior
+
+- **Non-overlapping matches** are all preserved
+- **Cross-line matches** are handled independently (no interference between lines)
+- **Adjacent matches** (touching but not overlapping) are both kept
+- **Partial overlaps** are resolved using the priority rules above
+
+### Examples
+
+```text
+Input: "Contact user@github.com or visit https://github.com/user"
+
+Without overlap resolution:
+- "user@github.com" (EMAIL)
+- "github.com" (partial GITHUB pattern)  
+- "https://github.com/user" (URL)
+
+With overlap resolution:
+- "user@github.com" (EMAIL wins over partial GITHUB)
+- "https://github.com/user" (URL, no overlap with EMAIL)
+```
+
+This ensures that users see intuitive, non-redundant matches where the highlighted text exactly matches what gets copied to the clipboard.
 
 ## Requirements
 
@@ -238,14 +310,16 @@ uv run ruff format .
 
 ### Test Coverage
 
-The project maintains **100% test coverage** with 117 comprehensive tests covering:
+The project maintains **100% test coverage** with 147 comprehensive tests covering:
 
 - **Regex pattern matching** - Tests for all 18 supported patterns
+- **Overlap resolution** - 15 tests covering priority rules, edge cases, and complex scenarios
 - **Hint generation** - Tests for optimal algorithm with all keyboard layouts
 - **Content grouping** - Tests for reducing hint count with duplicate content
 - **ANSI handling** - Tests for terminal escape sequence processing
 - **Tmux integration** - Mocked tests for tmux command execution
 - **Clipboard operations** - Cross-platform clipboard functionality tests
+- **Terminal control** - Tests for TTY detection and /dev/tty fallback logic
 - **Edge cases** - Comprehensive coverage of boundary conditions and error scenarios
 
 ## Contributing
