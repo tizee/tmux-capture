@@ -9,7 +9,7 @@
 
 A modern Python-based text selection tool for tmux, inspired by tmux-thumbs but designed for better usability and maintenance.
 
-![demo mp4](https://github.com/user-attachments/assets/a1b7d9fb-36c5-494d-8dca-8cc84d8e2196)
+<video src="https://github.com/user-attachments/assets/a1b7d9fb-36c5-494d-8dca-8cc84d8e2196" controls width="100%"></video>
 
 ## Motivation
 
