@@ -1,6 +1,15 @@
 # tmux-capture
 
+[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Dependency manager: uv](https://img.shields.io/badge/dependency%20manager-uv-blue.svg)](https://github.com/astral-sh/uv)
+[![tmux](https://img.shields.io/badge/tmux-compatible-green.svg)](https://github.com/tmux/tmux)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/tizee/tmux-capture)
+
 A modern Python-based text selection tool for tmux, inspired by tmux-thumbs but designed for better usability and maintenance.
+
+![demo mp4](https://github.com/user-attachments/assets/a1b7d9fb-36c5-494d-8dca-8cc84d8e2196)
 
 ## Motivation
 
