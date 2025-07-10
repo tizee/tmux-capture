@@ -1,6 +1,6 @@
 # tmux-capture
 
-[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Dependency manager: uv](https://img.shields.io/badge/dependency%20manager-uv-blue.svg)](https://github.com/astral-sh/uv)
