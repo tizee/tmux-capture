@@ -28,7 +28,7 @@ NEW_WINDOW_NAME="capture-$(date +%s)"
 # Create new window and run the capture script using uv
 # The script will run in interactive mode and wait for user input before closing
 tmux new-window -n "$NEW_WINDOW_NAME" -c "$SCRIPT_DIR" \
-    "uv run '$CAPTURE_SCRIPT' '$CURRENT_PANE' && exit 0"
+    "uv run --script '$CAPTURE_SCRIPT' '$CURRENT_PANE' && exit 0"
 
 # The window will automatically close after the script finishes
 # Thanks to the "tmux kill-window" command appended to the python command

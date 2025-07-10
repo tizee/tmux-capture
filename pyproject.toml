@@ -13,8 +13,6 @@ dependencies = [
     "blessed>=1.21.0",
 ]
 
-[project.scripts]
-tmux-capture = "tmux-capture:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -70,7 +68,9 @@ known-first-party = ["tmux_capture"]
 "tests/**/*.py" = ["E501", "F401"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["tmux_capture"]
+include = [
+    "tmux-capture",
+]
 exclude = [
     "tests/",
     "*.log",
@@ -78,6 +78,13 @@ exclude = [
     ".env*",
     "uv.lock",
     "*.yaml"
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "tmux-capture",
+    "README.md",
+    "LICENSE",
 ]
 
 [dependency-groups]
