@@ -406,6 +406,13 @@ class ShellCaptureTUI:
         self._flash_message_text: Optional[str] = None
         self._flash_message_expires: float = 0
         self._flash_message_style = ""
+        
+        # Performance optimization attributes
+        self._style_cache = {}  # Cache for computed styles to avoid recalculation
+        self._last_render_time = 0  # For render throttling
+        self._render_interval = 1.0 / 60.0  # Target 60 FPS (~0.016 seconds)
+        self._pending_render = False  # Flag to batch render requests
+        self._cache_clear_counter = 0  # Counter for periodic cache clearing
 
     def _handle_sigwinch(self, signum, frame):
         """Handle terminal window resize events (SIGWINCH signal)."""
@@ -413,6 +420,8 @@ class ShellCaptureTUI:
         if self.pty_process:
             self.pty_process.setwinsize(h, w)  # Update PTY dimensions
         self.pyte_screen.resize(lines=h, columns=w)  # Update screen buffer size
+        # Clear style cache on resize as terminal properties may change
+        self._style_cache.clear()
         self._render(full=True)  # Force full screen redraw
 
     def run(self):
@@ -498,18 +507,21 @@ class ShellCaptureTUI:
         """
         pty_fd = self.pty_process.fd
         while self.pty_process.isalive():
-            # MODIFIED: Check for flash message expiration and trigger redraw if needed.
+            # Check for flash message expiration and trigger redraw if needed.
             needs_render = False
             if self._flash_message_text and time.time() > self._flash_message_expires:
                 self._flash_message_text = None
                 needs_render = True  # Schedule a redraw to clear the message.
 
-            self._render(full=needs_render)
+            # Only render if necessary or if there's a pending render request
+            if needs_render or self._pending_render or self.pyte_screen.dirty:
+                self._render(full=needs_render)
 
-            # Use select() for non-blocking I/O monitoring
+            # Use select() for non-blocking I/O monitoring with optimized timeout
             try:
-                # Use a short timeout to keep the UI responsive for flash messages.
-                readable, _, _ = select.select([sys.stdin, pty_fd], [], [], 0.05)
+                # Adjust timeout based on render interval for better performance
+                timeout = min(self._render_interval, 0.1)  # Max 100ms, ideal ~16ms for 60fps
+                readable, _, _ = select.select([sys.stdin, pty_fd], [], [], timeout)
             except select.error as e:
                 if e.args[0] == 4:
                     continue  # Interrupted system call, retry
@@ -739,8 +751,18 @@ class ShellCaptureTUI:
     def _pyte_char_to_blessed(self, char: pyte_screens.Char) -> str:
         """
         Translates a pyte.Char's attributes into a blessed style string.
-        This is the final, optimized version.
+        Optimized version with caching to avoid recalculation.
         """
+        # Create a cache key from character attributes
+        cache_key = (
+            str(char.fg), str(char.bg), 
+            char.bold, char.italics, char.underscore, char.reverse
+        )
+        
+        # Check cache first
+        if cache_key in self._style_cache:
+            return self._style_cache[cache_key]
+            
         style = ""
 
         pyte_to_blessed_names = {
@@ -810,10 +832,33 @@ class ShellCaptureTUI:
         if char.reverse:
             style += self.term.reverse
 
+        # Cache the computed style for future use
+        self._style_cache[cache_key] = style
+        
+        # Periodic cache cleanup to prevent memory growth
+        self._cache_clear_counter += 1
+        if self._cache_clear_counter > 1000:  # Clear cache every 1000 style computations
+            if len(self._style_cache) > 200:  # Keep cache reasonable size
+                # Keep only 100 most recently used styles
+                items = list(self._style_cache.items())
+                self._style_cache = dict(items[-100:])
+            self._cache_clear_counter = 0
+            
         return style
 
-    def _render(self, full=False):
-        """Renders the pyte screen to the physical terminal using blessed."""
+    def _render(self, full=False, force=False):
+        """Renders the pyte screen to the physical terminal using blessed with throttling."""
+        current_time = time.time()
+        
+        # Implement render throttling unless forced or full refresh
+        if not force and not full:
+            if current_time - self._last_render_time < self._render_interval:
+                self._pending_render = True  # Mark for later rendering
+                return
+        
+        self._last_render_time = current_time
+        self._pending_render = False
+        
         lines_to_draw = (
             range(self.pyte_screen.lines) if full else self.pyte_screen.dirty
         )
@@ -837,28 +882,54 @@ class ShellCaptureTUI:
             return
 
         with self.term.hidden_cursor():
+            # Batch render all lines in one go for better performance
+            output_buffer = []
+            
             for y in lines_to_draw:
                 line = self.pyte_screen.buffer[y]
                 output_line = self.term.move_xy(0, y)
+                
+                # Optimize: process line in chunks of similar styles
                 current_style = "UNSET"
                 segment = ""
+                
                 for x in range(self.pyte_screen.columns):
                     char = line[x]
+                    # Skip empty characters optimization
+                    if char.data == ' ' and not any([char.bold, char.italics, char.underscore, char.reverse]) and str(char.fg) == 'default' and str(char.bg) == 'default':
+                        if current_style != "UNSET":
+                            if segment:
+                                output_line += self.term.normal + current_style + segment
+                            segment = char.data
+                            current_style = "UNSET"
+                        else:
+                            segment += char.data
+                        continue
+                    
                     style = self._pyte_char_to_blessed(char)
-
+                    
                     if style != current_style:
                         if segment:
-                            output_line += self.term.normal + current_style + segment
+                            if current_style == "UNSET":
+                                output_line += segment  # No style needed for default chars
+                            else:
+                                output_line += self.term.normal + current_style + segment
                         segment = char.data
                         current_style = style
                     else:
                         segment += char.data
 
                 if segment:
-                    output_line += self.term.normal + current_style + segment
+                    if current_style == "UNSET":
+                        output_line += segment
+                    else:
+                        output_line += self.term.normal + current_style + segment
 
                 output_line += self.term.clear_eol
-                print(output_line, end="")
+                output_buffer.append(output_line)
+            
+            # Print all lines at once
+            print(''.join(output_buffer), end="")
 
             self.pyte_screen.dirty.clear()
 
@@ -887,7 +958,7 @@ class ShellCaptureTUI:
         sys.stdout.flush()
 
     def _get_rendered_lines(self) -> List[str]:
-        """Builds a list of fully rendered, colored screen lines from the pyte buffer."""
+        """Builds a list of fully rendered, colored screen lines from the pyte buffer with optimizations."""
         rendered_lines = []
         for y in range(self.pyte_screen.lines):
             line = self.pyte_screen.buffer[y]
@@ -896,16 +967,33 @@ class ShellCaptureTUI:
             segment = ""
             for x in range(self.pyte_screen.columns):
                 char = line[x]
+                # Apply same optimization as main render method
+                if char.data == ' ' and not any([char.bold, char.italics, char.underscore, char.reverse]) and str(char.fg) == 'default' and str(char.bg) == 'default':
+                    if current_style != "UNSET":
+                        if segment:
+                            output_line += self.term.normal + current_style + segment
+                        segment = char.data
+                        current_style = "UNSET"
+                    else:
+                        segment += char.data
+                    continue
+                
                 style = self._pyte_char_to_blessed(char)
                 if style != current_style:
                     if segment:
-                        output_line += self.term.normal + current_style + segment
+                        if current_style == "UNSET":
+                            output_line += segment
+                        else:
+                            output_line += self.term.normal + current_style + segment
                     segment = char.data
                     current_style = style
                 else:
                     segment += char.data
             if segment:
-                output_line += self.term.normal + current_style + segment
+                if current_style == "UNSET":
+                    output_line += segment
+                else:
+                    output_line += self.term.normal + current_style + segment
             rendered_lines.append(output_line)
         return rendered_lines
 
