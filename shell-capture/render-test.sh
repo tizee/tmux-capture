@@ -63,7 +63,7 @@ for ((i = 1; i <= ITERATIONS; i++)); do
     # 3. ${RAND_CHAR}                   -> 打印字元
     #
     # 我們將所有指令累積在一個緩衝區中，每 200 次迭代刷新一次，以模擬 TUI 應用的刷新行為。
-    output_buffer+="\x1b[${RAND_ROW};${RAND_COL}H\x1b[38;5;${RAND_COLOR}m${RAND_CHAR}"
+    output_buffer+=$(printf "\x1b[%d;%dH\x1b[38;5;%dm%s" "$RAND_ROW" "$RAND_COL" "$RAND_COLOR" "$RAND_CHAR")
 
     # 為了避免 shell 緩衝區無限增長，定期刷新到螢幕
     if (( i % 200 == 0 )); then
@@ -83,7 +83,7 @@ fi
 
 # --- Cleanup ---
 # 將游標移動到左下角
-printf "\x1b[${ROWS};1H"
+printf "\x1b[%d;1H" "$ROWS"
 # 重置所有圖形屬性 (顏色等)
 tput sgr0
 # 清除從游標到螢幕結尾的所有內容

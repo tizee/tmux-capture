@@ -1,50 +1,71 @@
 # shell-capture
 
-A minimal terminal wrapper that provides tmux-capture functionality via global hotkeys. Built as a single-file `uv` script with complete terminal emulation and vim compatibility.
+⚠️ **WARNING: This is a Proof-of-Concept (PoC) tool. DO NOT use in production!**
 
-## Features
+An experimental terminal wrapper attempting to provide tmux-capture-like functionality. **This tool is NOT recommended for actual use** and serves only as a feasibility validation. Use `tmux-capture` instead for real-world needs.
 
-- **Transparent Shell Proxy**: Run any shell command in a transparent wrapper with full terminal emulation
-- **Global Hotkey**: Press `Ctrl+E` to enter capture mode with hint overlays
-- **Advanced Pattern Matching**: Automatically finds URLs, git commits, emails, file paths, and more
-- **Interactive Selection**: Use vim-style hints to select text with progressive typing
-- **True Color Support**: Full 24-bit color rendering with Gruvbox theme
-- **Vim Compatibility**: Enhanced vim support with alternative screen buffer handling
-- **Cross-platform Clipboard**: Automatic clipboard copying (macOS/Linux)
-- **Zero Configuration**: Works out of the box with automatic dependency management
-- **Complete Terminal Emulation**: Uses `pyte` library for full VT100+ compatibility
+## Why You Shouldn't Use This
 
-## Usage
+1. **Performance Overhead**: Adds ~10-15% performance penalty compared to native execution
+2. **Untested**: No comprehensive test suite - expect unknown behaviors and edge cases  
+3. **Incomplete Implementation**: Missing many features and proper error handling
+4. **Better Alternative Exists**: `tmux-capture` is mature, tested, and production-ready
+5. **Experimental Status**: This is a PoC with no maintenance or support
+
+## Performance Analysis
+
+Based on `render-test.sh` benchmark results:
+
+| Environment | Execution Time | Performance Impact |
+|-------------|----------------|-------------------|
+| Direct tmux shell | 17.916s | Baseline |
+| shell-capture in tmux | 19.822s | **+10.6% slower** |
+| Direct terminal | 17.154s | Baseline |
+
+**Key Findings:**
+- shell-capture adds approximately 1.9 seconds overhead (~10.6% performance penalty)
+- Increased system CPU usage due to additional I/O processing
+- Memory overhead from buffer management and terminal emulation
+
+## Experimental Features (Untested)
+
+- **Transparent Shell Proxy**: Attempts to wrap shell commands with terminal emulation
+- **Global Hotkey**: Press `Ctrl+E` to enter capture mode (may not work reliably)
+- **Pattern Matching**: Tries to find URLs, git commits, emails, file paths
+- **Interactive Selection**: Vim-style hints for text selection (experimental)
+- **Terminal Emulation**: Uses `pyte` library for VT100+ compatibility (incomplete)
+
+## Recommended Alternative
+
+**Use tmux-capture instead:**
 
 ```bash
-# Start with default shell (uv automatically installs dependencies)
-./shell-capture
+# Install tmux-capture (mature, tested solution)
+pip install tmux-capture
 
-# Start with specific shell
-./shell-capture bash
-./shell-capture zsh
-./shell-capture fish
-
-# Run complex commands
-./shell-capture "ssh user@host"
-./shell-capture tmux
-./shell-capture vim
-./shell-capture "python -m http.server"
-./shell-capture "top -i1"
-
-# Works with any terminal application
-./shell-capture htop
-./shell-capture "git log --oneline --graph"
+# Use tmux-capture for reliable terminal capture
+tmux-capture [options]
 ```
 
-## How It Works
+## Usage (At Your Own Risk)
 
-1. **Start the wrapper**: `./shell-capture`
-2. **Use normally**: The wrapper is transparent, use your shell as usual
-3. **Capture text**: Press `Ctrl+E` to enter capture mode
-4. **Select with hints**: Type the hint letters to select text
-5. **Auto-copy**: Selected text is automatically copied to clipboard
-6. **Return to shell**: Automatically returns to normal mode
+⚠️ **Disclaimer**: This tool may crash, produce unexpected results, or behave unpredictably.
+
+```bash
+# Basic usage (experimental)
+./shell-capture <command>
+
+# Examples (use with caution)
+./shell-capture bash
+./shell-capture "ls -la"
+```
+
+## What This PoC Demonstrates
+
+1. **Feasibility**: Terminal capture without tmux dependency is technically possible
+2. **Performance Cost**: Significant overhead (~10.6%) makes it impractical  
+3. **Complexity**: Terminal emulation is complex and error-prone
+4. **Value of tmux-capture**: Existing solution is superior in every way
 
 ## Requirements
 
@@ -70,43 +91,33 @@ Shell-capture creates a comprehensive terminal emulation wrapper around your she
 6. **Pattern Recognition**: Integrates tmux-capture's mature pattern matching engine
 7. **Alternative Screen Support**: Full vim/tmux compatibility with screen buffer switching
 
-## Compared to tmux-capture
+## Comparison: shell-capture vs tmux-capture
 
-- **Independence**: No tmux dependency - works standalone
-- **Universality**: Works with any shell/terminal combination
-- **Enhanced Compatibility**: Full vim support with Enter key handling and alt-screen
-- **True Color**: 24-bit color support with Gruvbox theming
-- **Terminal Emulation**: Complete terminal emulation vs tmux pane scraping
-- **Single File**: Zero-installation `uv` script with automatic dependencies
-- **Transparency**: Invisible when not capturing, complete passthrough
-- **Debugging**: Comprehensive logging system for troubleshooting
+| Feature | shell-capture (PoC) | tmux-capture (Recommended) |
+|---------|-------------------|---------------------------|
+| **Stability** | ❌ Experimental, untested | ✅ Mature, well-tested |
+| **Performance** | ❌ 10.6% overhead | ✅ Minimal overhead |
+| **Maintenance** | ❌ No support/updates | ✅ Actively maintained |
+| **Features** | ❌ Incomplete, buggy | ✅ Full feature set |
+| **Dependencies** | ❌ Complex Python deps | ✅ Simple tmux dependency |
+| **Error Handling** | ❌ Minimal, crashes | ✅ Robust error handling |
+| **Documentation** | ❌ Experimental only | ✅ Comprehensive docs |
+| **Community** | ❌ None | ✅ Active community |
 
-## Technical Highlights
+## Development Status
 
-### Terminal Emulation
-- **Complete VT100+ Support**: Full ANSI escape sequence processing
-- **Character Attributes**: Maintains color, style, and formatting per character
-- **Screen Management**: 2D buffer with cursor positioning and scrollback
-- **Alternative Screens**: Proper vim/tmux alternative screen buffer handling
+**Status**: ⚠️ Experimental / Abandoned
 
-### Vim Compatibility
-- **Enter Key Handling**: Automatic LF to CR conversion for vim mode
-- **Alternative Screen**: Save/restore main screen when entering vim
-- **Signal Handling**: Proper SIGWINCH forwarding for terminal resize
-- **Terminal Attributes**: Comprehensive termios configuration
+This PoC was created to explore whether terminal capture could work without tmux. While technically feasible, the experiment conclusively shows that:
 
-### Performance
-- **Dirty Line Tracking**: Only renders changed screen regions
-- **Select-based I/O**: Non-blocking multiplexed input/output
-- **Memory Efficient**: Automatic cleanup and history management
-- **Color Optimization**: Efficient RGB color handling
+1. **Performance penalty is too high** (~10.6% overhead)
+2. **Complexity is overwhelming** (terminal emulation is hard)
+3. **tmux-capture is simply better** in every meaningful way
 
-### Development Features
-- **Debug Logging**: Detailed debug.log for troubleshooting
-- **Monkey Patching**: Fixes for pyte/vim compatibility issues
-- **Comprehensive Error Handling**: Graceful degradation on failures
-- **Signal Management**: Proper cleanup and terminal restoration
+## Conclusion
 
-## Production Ready
+**Recommendation**: Use `tmux-capture` for any real-world terminal capture needs. This PoC demonstrates why reinventing the wheel is unnecessary when excellent solutions already exist.
 
-Built on the mature tmux-capture codebase and enhanced with robust terminal emulation. Features comprehensive vim compatibility testing and detailed logging for production deployment.
+---
+
+*This project serves as a testament to the quality and value of the existing tmux-capture ecosystem.*
