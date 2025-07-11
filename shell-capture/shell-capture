@@ -1,0 +1,562 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# dependencies = [
+#   "blessed >= 1.21.0",
+#   "ptyprocess >= 0.7.0",
+#   "pyte >= 0.8.1",
+# ]
+# ///
+"""
+Shell Capture - A robust TUI wrapper with a true 2D screen buffer.
+
+Final version with fixes for nested TUI color rendering and performance.
+"""
+
+import os
+import select
+import signal
+import sys
+import termios
+import re
+import math
+import subprocess
+import time
+from itertools import product, islice
+from typing import Dict, List, Optional
+
+import blessed
+import ptyprocess
+import pyte
+from pyte import screens as pyte_screens
+
+
+# --- MONKEY-PATCH FOR PYTE/VIM COMPATIBILITY ---
+# This patch fixes a TypeError when running complex TUI apps like Vim
+# by making `select_graphic_rendition` accept an unexpected `private` kwarg.
+original_sgr = pyte.screens.Screen.select_graphic_rendition
+def patched_select_graphic_rendition(self, *args, **kwargs):
+    kwargs.pop('private', None)
+    return original_sgr(self, *args, **kwargs)
+pyte.screens.Screen.select_graphic_rendition = patched_select_graphic_rendition
+# --- END OF MONKEY-PATCH ---
+
+
+# --- Global Color Configuration (Gruvbox Style) ---
+class ColorConfig:
+    """Color configuration for hint system using Gruvbox theme."""
+    MATCH_HIGHLIGHT_BG = "#458588"     # Gruvbox blue background for highlighted matches
+    HINT_DEFAULT_FG = "#282828"        # Dark foreground for default hints
+    HINT_DEFAULT_BG = "#fabd2f"        # Yellow background for default hints
+    HINT_TYPED_FG = "#fbf1c7"          # Light foreground for typed hints
+    HINT_TYPED_BG = "#fb4934"          # Red background for typed hints
+    HINT_PENDING_FG = "#282828"        # Dark foreground for pending hints
+    HINT_PENDING_BG = "#d79921"        # Orange background for pending hints
+    HINT_INACTIVE_FG = "#7c6f64"       # Dim foreground for inactive hints
+    HINT_INACTIVE_BG = "#3c3836"       # Dark background for inactive hints
+
+
+# --- Configuration and Constants ---
+DEFAULT_SHELL = os.environ.get('SHELL', '/bin/bash')
+CAPTURE_HOTKEY = b'\x05'  # Ctrl+E
+ALPHABETS = {"vim-movement": "hjklasdfqwer", "qwerty-homerow": "asdfjklgh"}
+DEFAULT_ALPHABET = "vim-movement"
+REGEX_PATTERNS = {
+    "URL": r"(?:https?://|git@|git://|ssh://|ftp://|file:///)\S+",
+    "FILE_PATH": r"(?:[.\w\-@$~\[\]]+)?(?:/[.\w\-@$\[\]]+)+",
+    "GIT_COMMIT": r"\b[0-9a-f]{7,40}\b",
+    "EMAIL": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
+}
+
+# --- Helper Functions ---
+def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    """Convert #RRGGBB format hex color string to (r, g, b) tuple."""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        raise ValueError("Invalid hex color format")
+    return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+
+def generate_hints(count: int) -> list[str]:
+    alphabet = ALPHABETS.get(DEFAULT_ALPHABET, "a")
+    a, L = len(alphabet), 1
+    if a == 0 and count > 0: return []
+    if count <= 0: return []
+    while a**L < count: L += 1
+    if L == 1: return list(alphabet)[:count]
+    n_short = math.floor((a**L - count) / (a - 1))
+    n_long = count - n_short
+    hints = []; short_gen = ("".join(p) for p in product(alphabet, repeat=L - 1))
+    hints.extend(islice(short_gen, n_short))
+    long_prefixes = short_gen; n_long_gen = 0
+    for prefix in long_prefixes:
+        for char in alphabet:
+            if n_long_gen >= n_long: break
+            hints.append(prefix + char)
+            n_long_gen += 1
+    return hints
+
+def copy_to_clipboard(text: str) -> bool:
+    if not text: return False
+    try:
+        if sys.platform == "darwin": cmd = ["pbcopy"]
+        else: cmd = ["xclip", "-selection", "clipboard"]
+        subprocess.run(cmd, input=text.encode("utf-8"), check=True, stderr=subprocess.DEVNULL)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError): return False
+
+# --- UI Components ---
+class CaptureUI:
+    """
+    Interactive hint-based text selection overlay using tmux-capture's pattern matching.
+    
+    This class provides the capture mode interface that:
+    - Finds text patterns (URLs, file paths, git commits, emails) in screen content
+    - Generates vim-friendly hints for each match
+    - Provides interactive selection using keyboard input
+    - Uses Gruvbox color scheme for visual consistency
+    """
+    def __init__(self, term: blessed.Terminal, plain_lines: List[str], colored_lines: List[str]):
+        self.term = term
+        self.plain_lines = plain_lines    # Unformatted text for pattern matching
+        self.colored_lines = colored_lines  # ANSI-formatted text for display
+        
+        # Find all matches and assign hints
+        self.matches = self._find_matches()    # List of pattern matches with positions
+        self.hints = self._assign_hints()      # Dict mapping hints to representative matches
+        
+        # Create content->hint mapping and assign hints to ALL matches
+        content_groups = self._group_matches_by_content()
+        content_to_hint = {}
+        for hint, match_obj in self.hints.items():
+            content_to_hint[match_obj["text"]] = hint
+        
+        # Assign the same hint to all matches with identical content
+        for match in self.matches:
+            match['hint'] = content_to_hint[match["text"]]
+
+    def _find_matches(self) -> List[dict]:
+        """
+        Scan plain text lines for all defined patterns (URLs, paths, commits, emails).
+        
+        Returns list of dicts with keys: 'text' (matched content), 'y' (line), 'x' (column)
+        """
+        found = []
+        for i, line in enumerate(self.plain_lines):
+            for name, pattern in REGEX_PATTERNS.items():
+                for m in re.finditer(pattern, line):
+                    found.append({"text": m.group(0), "y": i, "x": m.start()})
+        return found
+
+    def _group_matches_by_content(self) -> Dict[str, List[dict]]:
+        """
+        Group matches by their text content to reduce hint count.
+        Same content gets same hint, improving user experience.
+        
+        Returns dict mapping text content to list of match objects.
+        """
+        content_groups = {}
+        for match in self.matches:
+            content = match["text"]
+            if content not in content_groups:
+                content_groups[content] = []
+            content_groups[content].append(match)
+        return content_groups
+
+    def _assign_hints(self) -> Dict[str, dict]:
+        """
+        Generate vim-friendly hints for unique content, then assign to all matching items.
+        This optimization ensures identical content uses the same hint across all instances.
+        
+        Returns dict mapping hint strings to match objects for quick lookup.
+        """
+        # Group matches by content to reduce total hints needed
+        content_groups = self._group_matches_by_content()
+        
+        # Generate hints only for unique content
+        unique_contents = list(content_groups.keys())
+        hints = generate_hints(len(unique_contents))
+        content_to_hint = dict(zip(unique_contents, hints))
+        
+        # Create hint->match mapping, using first match of each content group
+        hint_to_match = {}
+        for content, hint in content_to_hint.items():
+            # Use the first match as the representative for this content
+            hint_to_match[hint] = content_groups[content][0]
+        
+        return hint_to_match
+
+    def run(self) -> Optional[str]:
+        """
+        Main interactive loop for hint-based text selection.
+        
+        User types hint characters to select matches. Returns selected text or None.
+        Supports:
+        - Progressive typing: 'a' -> 'as' -> 'asd' to narrow selection
+        - Backspace to delete typed characters  
+        - Escape/Ctrl+C to cancel
+        """
+        if not self.matches: return None  # No patterns found
+        current_input = ""
+        alphabet = ALPHABETS.get(DEFAULT_ALPHABET, "a")
+
+        with self.term.cbreak(), self.term.hidden_cursor():
+            while True:
+                self.draw(current_input)  # Render hints with current typing state
+                
+                # Check if current input uniquely identifies a hint
+                is_prefix = any(h.startswith(current_input) and h != current_input for h in self.hints)
+                if current_input in self.hints and not is_prefix:
+                    return self.hints[current_input]["text"]  # Return the content text
+
+                # Handle keyboard input
+                key = self.term.inkey()
+                if key.is_sequence:
+                    if key.name in ("KEY_ESCAPE", "KEY_CTRL_C"): return None  # Cancel
+                    if key.name == "KEY_BACKSPACE": current_input = current_input[:-1]  # Delete char
+                elif key and key.lower() in alphabet:
+                    # Only accept keys that would lead to valid hints
+                    if any(h.startswith(current_input + key.lower()) for h in self.hints):
+                        current_input += key.lower()
+
+    def draw(self, current_input: str):
+        """
+        Draws the UI with hints overlay using Gruvbox color scheme.
+        
+        Shows identical content with the same hint across all instances,
+        reducing cognitive load for repeated patterns.
+        """
+        term = self.term
+
+        # Display colored terminal lines first
+        for i, line in enumerate(self.colored_lines):
+            print(term.move_xy(0, i) + line + term.clear_eol, end="")
+
+        # Pre-compute terminal style strings using ColorConfig for better performance
+        try:
+            # Match highlighting style (blue background from Gruvbox)
+            highlight_style = term.on_color_rgb(*hex_to_rgb(ColorConfig.MATCH_HIGHLIGHT_BG))
+            
+            # Hint styles using Gruvbox theme
+            style_default = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_DEFAULT_FG)) + 
+                           term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_DEFAULT_BG)))
+            style_inactive = (term.dim + 
+                            term.color_rgb(*hex_to_rgb(ColorConfig.HINT_INACTIVE_FG)) + 
+                            term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_INACTIVE_BG)))
+            style_typed_part = (term.bold + 
+                              term.color_rgb(*hex_to_rgb(ColorConfig.HINT_TYPED_FG)) + 
+                              term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_TYPED_BG)))
+            style_pending_part = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_PENDING_FG)) + 
+                                term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_PENDING_BG)))
+        except ValueError as e:
+            # Fallback to simple colors if hex conversion fails
+            highlight_style = term.on_gray20
+            style_default = term.on_bright_yellow + term.black
+            style_inactive = term.on_gray20 + term.gray70
+            style_typed_part = term.on_red + term.bold_white
+            style_pending_part = term.on_blue + term.white
+
+        # Highlight all matches with background color
+        for match in self.matches:
+            print(term.move_xy(match['x'], match['y']) + highlight_style + match['text'] + term.normal, end="")
+
+        for match in self.matches:
+            hint = match.get("hint", "")
+            if not hint:
+                continue
+
+            hint_display = ""
+            if not current_input:
+                hint_display = style_default + hint
+            elif hint.startswith(current_input):
+                typed_len = len(current_input)
+                typed_text = hint[:typed_len]
+                pending_text = hint[typed_len:]
+                hint_display = style_typed_part + typed_text + style_pending_part + pending_text
+            else:
+                hint_display = style_inactive + hint
+
+            print(term.move_xy(match['x'], match['y']) + hint_display + term.normal, end="")
+
+        sys.stdout.flush()
+
+
+class ShellCaptureTUI:
+    """
+    Main TUI application that provides a transparent shell proxy with capture capabilities.
+    
+    This class creates a PTY (pseudo-terminal) to run shell commands while providing
+    a blessed-based TUI overlay. Key features:
+    - Transparent shell interaction (all commands pass through to real shell)
+    - Global hotkey (Ctrl+E) triggers capture mode with hint overlays
+    - Real-time terminal emulation using pyte library
+    - Gruvbox-themed hint system for pattern selection
+    """
+    def __init__(self, command: str):
+        # Core terminal and PTY management
+        self.term = blessed.Terminal()                    # blessed terminal for TUI rendering
+        self.pty_process = None                           # PTY process for shell interaction
+        
+        # Terminal emulation using pyte library
+        self.pyte_screen = pyte_screens.Screen(self.term.width, self.term.height)
+        self.pyte_stream = pyte.Stream(self.pyte_screen)  # Processes ANSI escape sequences
+        
+        # Application state
+        self.command = command                            # Shell command to execute
+        self._flash_message_text = None                   # Temporary status message
+        self._flash_message_expires = 0                   # Message expiration timestamp
+
+    def _handle_sigwinch(self, signum, frame):
+        """Handle terminal window resize events (SIGWINCH signal)."""
+        h, w = self.term.height, self.term.width
+        if self.pty_process: 
+            self.pty_process.setwinsize(h, w)             # Update PTY dimensions
+        self.pyte_screen.resize(lines=h, columns=w)       # Update screen buffer size
+        self._render(full=True)                           # Force full screen redraw
+
+    def run(self):
+        env = os.environ.copy(); env["TERM"] = "xterm-256color"
+        try:
+            self.pty_process = ptyprocess.PtyProcess.spawn(
+                [DEFAULT_SHELL, '-c', self.command],
+                dimensions=(self.term.height, self.term.width), env=env
+            )
+        except Exception as e:
+            print(f"Failed to start PTY process: {e}", file=sys.stderr)
+            return
+
+        signal.signal(signal.SIGWINCH, self._handle_sigwinch)
+        with self.term.fullscreen(), self.term.cbreak():
+            try: self._main_loop()
+            finally:
+                if self.pty_process and self.pty_process.isalive():
+                    self.pty_process.terminate(force=True)
+
+    def _main_loop(self):
+        """
+        Main event loop that handles bidirectional I/O between user and shell.
+        
+        This loop:
+        1. Monitors both stdin (user input) and PTY (shell output)
+        2. Intercepts Ctrl+E hotkey to trigger capture mode
+        3. Forwards all other input transparently to the shell
+        4. Processes shell output through pyte for terminal emulation
+        """
+        pty_fd = self.pty_process.fd
+        while self.pty_process.isalive():
+            self._render()  # Update screen display
+            
+            # Use select() for non-blocking I/O monitoring
+            try:
+                readable, _, _ = select.select([sys.stdin, pty_fd], [], [], 0.01)
+            except select.error as e:
+                if e.args[0] == 4: continue  # Interrupted system call, retry
+                raise
+
+            # Handle user input (keyboard)
+            if sys.stdin in readable:
+                try:
+                    user_input = os.read(sys.stdin.fileno(), 1024)
+                    if not user_input: break  # EOF
+                    
+                    # Check for capture hotkey (Ctrl+E)
+                    if CAPTURE_HOTKEY in user_input:
+                        # Split input around hotkey to preserve other characters
+                        prefix, _, suffix = user_input.partition(CAPTURE_HOTKEY)
+                        if prefix: self.pty_process.write(prefix)
+                        self._enter_capture_mode()  # Enter hint overlay mode
+                        if suffix: self.pty_process.write(suffix)
+                    else:
+                        # Forward input transparently to shell
+                        self.pty_process.write(user_input)
+                except OSError: break
+
+            # Handle shell output
+            if pty_fd in readable:
+                try:
+                    pty_output = self.pty_process.read()
+                    if not pty_output: break  # EOF
+                    # Feed output to pyte for terminal emulation
+                    self.pyte_stream.feed(pty_output.decode('utf-8', 'replace'))
+                except EOFError: break
+
+    def _pyte_char_to_blessed(self, char: pyte_screens.Char) -> str:
+        """
+        Translates a pyte.Char's attributes into a blessed style string.
+        This is the final, optimized version.
+        """
+        style = ""
+
+        pyte_to_blessed_names = {
+            'black': 'black', 'red': 'red', 'green': 'green', 'yellow': 'yellow',
+            'blue': 'blue', 'magenta': 'magenta', 'cyan': 'cyan', 'white': 'white',
+            'brightblack': 'bright_black', 'brightred': 'bright_red',
+            'brightgreen': 'bright_green', 'brightyellow': 'bright_yellow',
+            'brightblue': 'bright_blue', 'brightmagenta': 'bright_magenta',
+            'brightcyan': 'bright_cyan', 'brightwhite': 'bright_white',
+            'brown': 'yellow',  # FIX: Map 'brown' from pyte to blessed's 'yellow'.
+        }
+
+        def is_hex_color(s: str) -> bool:
+            if s.startswith('#'): s = s[1:]
+            return len(s) == 6 and all(c in '0123456789abcdefABCDEF' for c in s)
+
+        # --- Foreground Color ---
+        fg = str(char.fg)
+        if fg in pyte_to_blessed_names:
+            style += getattr(self.term, pyte_to_blessed_names[fg])
+        # CORRECTED ORDER: Check for hex color *before* isdigit.
+        elif is_hex_color(fg):
+            hex_val = fg.lstrip('#')
+            r, g, b = int(hex_val[0:2], 16), int(hex_val[2:4], 16), int(hex_val[4:6], 16)
+            style += self.term.color_rgb(r, g, b)
+        elif fg.isdigit():
+            style += self.term.color(int(fg))
+
+        # --- Background Color ---
+        bg = str(char.bg)
+        if bg in pyte_to_blessed_names:
+            style += getattr(self.term, f"on_{pyte_to_blessed_names[bg]}")
+        # CORRECTED ORDER: Check for hex color *before* isdigit.
+        elif is_hex_color(bg):
+            hex_val = bg.lstrip('#')
+            r, g, b = int(hex_val[0:2], 16), int(hex_val[2:4], 16), int(hex_val[4:6], 16)
+            style += self.term.on_color_rgb(r, g, b)
+        elif bg.isdigit():
+            style += self.term.on_color(int(bg))
+
+        # --- Text Attributes ---
+        if char.bold: style += self.term.bold
+        if char.italics: style += self.term.italic
+        if char.underscore: style += self.term.underline
+        if char.reverse: style += self.term.reverse
+
+        return style
+
+    def _render(self, full=False):
+        """Renders the pyte screen to the physical terminal using blessed."""
+        lines_to_draw = range(self.pyte_screen.lines) if full else self.pyte_screen.dirty
+
+        if not lines_to_draw and not self._flash_message_text and not full:
+            if self.pyte_screen.cursor.hidden: print(self.term.hide_cursor(), end="")
+            else: print(self.term.normal_cursor() + self.term.move_xy(self.pyte_screen.cursor.x, self.pyte_screen.cursor.y), end="")
+            sys.stdout.flush()
+            return
+
+        with self.term.hidden_cursor():
+            for y in lines_to_draw:
+                line = self.pyte_screen.buffer[y]
+                output_line = self.term.move_xy(0, y)
+                current_style = "UNSET"
+                segment = ""
+                for x in range(self.pyte_screen.columns):
+                    char = line[x]
+                    style = self._pyte_char_to_blessed(char)
+
+                    if style != current_style:
+                        if segment:
+                            output_line += self.term.normal + current_style + segment
+                        segment = char.data
+                        current_style = style
+                    else:
+                        segment += char.data
+
+                if segment:
+                    output_line += self.term.normal + current_style + segment
+
+                output_line += self.term.clear_eol
+                print(output_line, end="")
+
+            self.pyte_screen.dirty.clear()
+
+        if not self.pyte_screen.cursor.hidden:
+            print(self.term.normal_cursor() + self.term.move_xy(self.pyte_screen.cursor.x, self.pyte_screen.cursor.y), end="")
+        sys.stdout.flush()
+
+
+    def _get_rendered_lines(self) -> List[str]:
+        """Builds a list of fully rendered, colored screen lines from the pyte buffer."""
+        rendered_lines = []
+        for y in range(self.pyte_screen.lines):
+            line = self.pyte_screen.buffer[y]
+            output_line = ""
+            current_style = "UNSET"
+            segment = ""
+            for x in range(self.pyte_screen.columns):
+                char = line[x]
+                style = self._pyte_char_to_blessed(char)
+                if style != current_style:
+                    if segment:
+                        output_line += self.term.normal + current_style + segment
+                    segment = char.data
+                    current_style = style
+                else:
+                    segment += char.data
+            if segment:
+                output_line += self.term.normal + current_style + segment
+            rendered_lines.append(output_line)
+        return rendered_lines
+
+    def _enter_capture_mode(self):
+        """
+        Enter capture mode with hint overlays for pattern selection.
+        
+        This method:
+        1. Captures current screen content (both plain text and styled)
+        2. Creates CaptureUI for interactive hint-based selection
+        3. Copies selected text to clipboard and shows status feedback
+        """
+        time.sleep(0.05)         # Brief pause to ensure screen is stable
+        self._render(full=True)  # Force complete screen refresh
+        
+        # Extract screen content in two formats:
+        # 1. Plain text for pattern matching
+        plain_lines = [self.pyte_screen.display[i].rstrip() for i in range(self.pyte_screen.lines)]
+        # 2. Colored/styled text for display
+        colored_lines = self._get_rendered_lines()
+        
+        # Launch interactive capture UI
+        capture_app = CaptureUI(self.term, plain_lines, colored_lines)
+        selected_text = capture_app.run()
+        
+        # Restore normal display and handle selection result
+        self._render(full=True)
+        if selected_text:
+            if copy_to_clipboard(selected_text):
+                self._flash(f"Copied: {selected_text[:50]}")
+            else:
+                self._flash("Failed to copy to clipboard")
+
+    def _flash(self, message: str, duration: float = 1.2):
+        self._flash_message_text = message
+        self._flash_message_expires = time.time() + duration
+
+def main():
+    """
+    Entry point for shell-capture application.
+    
+    Usage:
+        shell-capture [command]    # Run specific command in capture wrapper
+        shell-capture              # Start default shell in capture wrapper
+    
+    Controls:
+        Ctrl+E                     # Enter capture mode (hint overlay)
+        [hint keys]                # Select pattern in capture mode  
+        Escape/Ctrl+C              # Exit capture mode
+        All other input            # Transparent pass-through to shell
+    """
+    # Parse command line arguments
+    command = ' '.join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_SHELL
+    
+    # Create and run the TUI application
+    app = ShellCaptureTUI(command)
+    try: 
+        app.run()
+    except KeyboardInterrupt: 
+        pass  # Clean exit on Ctrl+C
+    except Exception:
+        import traceback
+        # Ensure terminal state is restored before printing traceback
+        print(blessed.Terminal().normal)
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
