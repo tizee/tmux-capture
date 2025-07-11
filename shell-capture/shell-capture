@@ -21,6 +21,7 @@ import re
 import math
 import subprocess
 import time
+import logging
 from itertools import product, islice
 from typing import Dict, List, Optional
 
@@ -39,6 +40,33 @@ def patched_select_graphic_rendition(self, *args, **kwargs):
     return original_sgr(self, *args, **kwargs)
 pyte.screens.Screen.select_graphic_rendition = patched_select_graphic_rendition
 # --- END OF MONKEY-PATCH ---
+
+
+# --- Logging Configuration ---
+def setup_logging():
+    """Setup detailed logging for debugging terminal emulation issues."""
+    logger = logging.getLogger('shell_capture')
+    logger.setLevel(logging.DEBUG)
+
+    # Create file handler for debug.log
+    handler = logging.FileHandler('debug.log', mode='w')
+    handler.setLevel(logging.DEBUG)
+
+    # Create detailed formatter
+    formatter = logging.Formatter(
+        '%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    handler.setFormatter(formatter)
+
+    # Add handler to logger
+    logger.addHandler(handler)
+
+    return logger
+
+# Global logger instance
+logger = setup_logging()
+logger.setLevel(logging.CRITICAL)
 
 
 # --- Global Color Configuration (Gruvbox Style) ---
@@ -107,7 +135,7 @@ def copy_to_clipboard(text: str) -> bool:
 class CaptureUI:
     """
     Interactive hint-based text selection overlay using tmux-capture's pattern matching.
-    
+
     This class provides the capture mode interface that:
     - Finds text patterns (URLs, file paths, git commits, emails) in screen content
     - Generates vim-friendly hints for each match
@@ -118,17 +146,17 @@ class CaptureUI:
         self.term = term
         self.plain_lines = plain_lines    # Unformatted text for pattern matching
         self.colored_lines = colored_lines  # ANSI-formatted text for display
-        
+
         # Find all matches and assign hints
         self.matches = self._find_matches()    # List of pattern matches with positions
         self.hints = self._assign_hints()      # Dict mapping hints to representative matches
-        
+
         # Create content->hint mapping and assign hints to ALL matches
         content_groups = self._group_matches_by_content()
         content_to_hint = {}
         for hint, match_obj in self.hints.items():
             content_to_hint[match_obj["text"]] = hint
-        
+
         # Assign the same hint to all matches with identical content
         for match in self.matches:
             match['hint'] = content_to_hint[match["text"]]
@@ -136,7 +164,7 @@ class CaptureUI:
     def _find_matches(self) -> List[dict]:
         """
         Scan plain text lines for all defined patterns (URLs, paths, commits, emails).
-        
+
         Returns list of dicts with keys: 'text' (matched content), 'y' (line), 'x' (column)
         """
         found = []
@@ -150,7 +178,7 @@ class CaptureUI:
         """
         Group matches by their text content to reduce hint count.
         Same content gets same hint, improving user experience.
-        
+
         Returns dict mapping text content to list of match objects.
         """
         content_groups = {}
@@ -165,33 +193,33 @@ class CaptureUI:
         """
         Generate vim-friendly hints for unique content, then assign to all matching items.
         This optimization ensures identical content uses the same hint across all instances.
-        
+
         Returns dict mapping hint strings to match objects for quick lookup.
         """
         # Group matches by content to reduce total hints needed
         content_groups = self._group_matches_by_content()
-        
+
         # Generate hints only for unique content
         unique_contents = list(content_groups.keys())
         hints = generate_hints(len(unique_contents))
         content_to_hint = dict(zip(unique_contents, hints))
-        
+
         # Create hint->match mapping, using first match of each content group
         hint_to_match = {}
         for content, hint in content_to_hint.items():
             # Use the first match as the representative for this content
             hint_to_match[hint] = content_groups[content][0]
-        
+
         return hint_to_match
 
     def run(self) -> Optional[str]:
         """
         Main interactive loop for hint-based text selection.
-        
+
         User types hint characters to select matches. Returns selected text or None.
         Supports:
         - Progressive typing: 'a' -> 'as' -> 'asd' to narrow selection
-        - Backspace to delete typed characters  
+        - Backspace to delete typed characters
         - Escape/Ctrl+C to cancel
         """
         if not self.matches: return None  # No patterns found
@@ -201,7 +229,7 @@ class CaptureUI:
         with self.term.cbreak(), self.term.hidden_cursor():
             while True:
                 self.draw(current_input)  # Render hints with current typing state
-                
+
                 # Check if current input uniquely identifies a hint
                 is_prefix = any(h.startswith(current_input) and h != current_input for h in self.hints)
                 if current_input in self.hints and not is_prefix:
@@ -220,7 +248,7 @@ class CaptureUI:
     def draw(self, current_input: str):
         """
         Draws the UI with hints overlay using Gruvbox color scheme.
-        
+
         Shows identical content with the same hint across all instances,
         reducing cognitive load for repeated patterns.
         """
@@ -234,17 +262,17 @@ class CaptureUI:
         try:
             # Match highlighting style (blue background from Gruvbox)
             highlight_style = term.on_color_rgb(*hex_to_rgb(ColorConfig.MATCH_HIGHLIGHT_BG))
-            
+
             # Hint styles using Gruvbox theme
-            style_default = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_DEFAULT_FG)) + 
+            style_default = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_DEFAULT_FG)) +
                            term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_DEFAULT_BG)))
-            style_inactive = (term.dim + 
-                            term.color_rgb(*hex_to_rgb(ColorConfig.HINT_INACTIVE_FG)) + 
+            style_inactive = (term.dim +
+                            term.color_rgb(*hex_to_rgb(ColorConfig.HINT_INACTIVE_FG)) +
                             term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_INACTIVE_BG)))
-            style_typed_part = (term.bold + 
-                              term.color_rgb(*hex_to_rgb(ColorConfig.HINT_TYPED_FG)) + 
+            style_typed_part = (term.bold +
+                              term.color_rgb(*hex_to_rgb(ColorConfig.HINT_TYPED_FG)) +
                               term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_TYPED_BG)))
-            style_pending_part = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_PENDING_FG)) + 
+            style_pending_part = (term.color_rgb(*hex_to_rgb(ColorConfig.HINT_PENDING_FG)) +
                                 term.on_color_rgb(*hex_to_rgb(ColorConfig.HINT_PENDING_BG)))
         except ValueError as e:
             # Fallback to simple colors if hex conversion fails
@@ -282,7 +310,7 @@ class CaptureUI:
 class ShellCaptureTUI:
     """
     Main TUI application that provides a transparent shell proxy with capture capabilities.
-    
+
     This class creates a PTY (pseudo-terminal) to run shell commands while providing
     a blessed-based TUI overlay. Key features:
     - Transparent shell interaction (all commands pass through to real shell)
@@ -294,11 +322,21 @@ class ShellCaptureTUI:
         # Core terminal and PTY management
         self.term = blessed.Terminal()                    # blessed terminal for TUI rendering
         self.pty_process = None                           # PTY process for shell interaction
-        
-        # Terminal emulation using pyte library
-        self.pyte_screen = pyte_screens.Screen(self.term.width, self.term.height)
+
+        # Terminal emulation using pyte library with history support
+        # HistoryScreen provides scrollback buffer and better vim compatibility
+        self.pyte_screen = pyte_screens.HistoryScreen(
+            columns=self.term.width,
+            lines=self.term.height,
+            history=1000,  # Keep 1000 lines of scrollback history for terminal restoration
+            ratio=0.5      # Scroll half-screen at a time
+        )
+
+        # Store main screen content for alternative screen buffer support
+        self.main_screen_content = None
+        self.in_alt_screen = False
         self.pyte_stream = pyte.Stream(self.pyte_screen)  # Processes ANSI escape sequences
-        
+
         # Application state
         self.command = command                            # Shell command to execute
         self._flash_message_text = None                   # Temporary status message
@@ -307,33 +345,84 @@ class ShellCaptureTUI:
     def _handle_sigwinch(self, signum, frame):
         """Handle terminal window resize events (SIGWINCH signal)."""
         h, w = self.term.height, self.term.width
-        if self.pty_process: 
+        if self.pty_process:
             self.pty_process.setwinsize(h, w)             # Update PTY dimensions
         self.pyte_screen.resize(lines=h, columns=w)       # Update screen buffer size
         self._render(full=True)                           # Force full screen redraw
 
     def run(self):
-        env = os.environ.copy(); env["TERM"] = "xterm-256color"
+        logger.info(f"=== SHELL_CAPTURE_START: command={self.command} ===")
+        logger.debug(f"TERMINAL_SIZE: {self.term.width}x{self.term.height}")
+
+        # Enhanced environment setup for better vim compatibility
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        # Ensure vim recognizes proper terminal capabilities
+        env["VIM_TERMINAL"] = "1"
+        # Set consistent terminal size
+        env["LINES"] = str(self.term.height)
+        env["COLUMNS"] = str(self.term.width)
+        logger.debug(f"ENV_SETUP: TERM={env['TERM']}, COLORTERM={env.get('COLORTERM')}")
+
         try:
             self.pty_process = ptyprocess.PtyProcess.spawn(
                 [DEFAULT_SHELL, '-c', self.command],
-                dimensions=(self.term.height, self.term.width), env=env
+                dimensions=(self.term.height, self.term.width),
+                env=env
             )
+            logger.debug(f"PTY_PROCESS_SPAWNED: pid={self.pty_process.pid}")
+
+            # Set proper terminal attributes for vim compatibility
+            try:
+                # Get current terminal attributes
+                attrs = termios.tcgetattr(self.pty_process.fd)
+
+                # Input flags (c_iflag) - enable proper input processing for vim
+                attrs[0] |= termios.ICRNL    # Map CR to NL on input
+                attrs[0] |= termios.IXON     # Enable XON/XOFF flow control
+
+                # Output flags (c_oflag) - ensure proper output processing
+                attrs[1] |= termios.OPOST    # Enable output processing
+                attrs[1] |= termios.ONLCR    # Map NL to CR-NL on output
+
+                # Control flags (c_cflag) - already set by ptyprocess
+
+                # Local flags (c_lflag) - configure for interactive applications
+                attrs[3] |= termios.ICANON   # Enable canonical mode for line editing
+                attrs[3] |= termios.ECHO     # Enable echo (vim needs this)
+                attrs[3] |= termios.ECHOE    # Enable erase character echo
+                attrs[3] |= termios.ECHOK    # Enable kill character echo
+                attrs[3] |= termios.ISIG     # Enable signals (Ctrl+C, etc.)
+                attrs[3] &= ~termios.ECHONL  # Disable newline echo when ECHO is off
+
+                termios.tcsetattr(self.pty_process.fd, termios.TCSANOW, attrs)
+                logger.debug("PTY_TERMINAL_ATTRS: configured comprehensive vim compatibility")
+            except Exception as attr_e:
+                logger.warning(f"PTY_TERMINAL_ATTRS_FAILED: {attr_e}")
+
         except Exception as e:
+            logger.error(f"PTY_SPAWN_FAILED: {e}")
             print(f"Failed to start PTY process: {e}", file=sys.stderr)
             return
 
         signal.signal(signal.SIGWINCH, self._handle_sigwinch)
+        logger.debug("SIGNAL_HANDLER_REGISTERED: SIGWINCH")
+
         with self.term.fullscreen(), self.term.cbreak():
-            try: self._main_loop()
+            logger.debug("TERMINAL_MODE: fullscreen + cbreak enabled")
+            try:
+                self._main_loop()
             finally:
+                logger.debug("CLEANUP: terminating PTY process")
                 if self.pty_process and self.pty_process.isalive():
                     self.pty_process.terminate(force=True)
+                logger.info("=== SHELL_CAPTURE_END ===")
 
     def _main_loop(self):
         """
         Main event loop that handles bidirectional I/O between user and shell.
-        
+
         This loop:
         1. Monitors both stdin (user input) and PTY (shell output)
         2. Intercepts Ctrl+E hotkey to trigger capture mode
@@ -343,7 +432,7 @@ class ShellCaptureTUI:
         pty_fd = self.pty_process.fd
         while self.pty_process.isalive():
             self._render()  # Update screen display
-            
+
             # Use select() for non-blocking I/O monitoring
             try:
                 readable, _, _ = select.select([sys.stdin, pty_fd], [], [], 0.01)
@@ -356,17 +445,81 @@ class ShellCaptureTUI:
                 try:
                     user_input = os.read(sys.stdin.fileno(), 1024)
                     if not user_input: break  # EOF
-                    
+
+                    # Log user input with detailed analysis
+                    logger.debug(f"USER_INPUT: {repr(user_input)}")
+
+                    # Enhanced Enter key handling for vim compatibility
+                    if user_input in (b'\r', b'\n', b'\r\n'):
+                        logger.debug(f"ENTER_KEY detected: {repr(user_input)} ord_values={[b for b in user_input]}")
+                        # Also log what vim might expect
+                        if user_input == b'\n':
+                            logger.debug("ENTER_TYPE: LF (Line Feed) - Unix style")
+                        elif user_input == b'\r':
+                            logger.debug("ENTER_TYPE: CR (Carriage Return) - Mac style")
+                        elif user_input == b'\r\n':
+                            logger.debug("ENTER_TYPE: CRLF (Carriage Return + Line Feed) - Windows style")
+
+                        # Check if we're in alternative screen (vim mode)
+                        if self.in_alt_screen:
+                            logger.debug("VIM_ENTER_PROCESSING: In alternative screen, ensuring proper Enter handling")
+                            # For vim compatibility, always ensure we send carriage return
+                            if user_input == b'\n':
+                                logger.debug("VIM_ENTER_CONVERSION: Converting LF to CR for vim compatibility")
+                                # Keep original input but log the conversion attempt
+
+                    elif user_input == b'\x1b':
+                        logger.debug("ESCAPE_KEY detected")
+                    elif len(user_input) == 1 and user_input[0] < 32:
+                        logger.debug(f"CONTROL_KEY detected: ord={user_input[0]} char={repr(user_input)}")
+
+                    # Log all printable characters for debugging
+                    if len(user_input) == 1 and 32 <= user_input[0] <= 126:
+                        logger.debug(f"PRINTABLE_KEY detected: {repr(user_input)} char='{user_input.decode()}'")
+
+                    # Log multi-byte sequences (could be escape sequences)
+                    if len(user_input) > 1:
+                        logger.debug(f"MULTI_BYTE_INPUT detected: {repr(user_input)} length={len(user_input)}")
+                        # Check if it's an escape sequence
+                        if user_input.startswith(b'\x1b'):
+                            logger.debug(f"ESCAPE_SEQUENCE detected: {repr(user_input)}")
+
+                    # Log raw bytes for complete analysis
+                    logger.debug(f"RAW_BYTES: {[hex(b) for b in user_input]} decimal={[b for b in user_input]}")
+
                     # Check for capture hotkey (Ctrl+E)
                     if CAPTURE_HOTKEY in user_input:
+                        logger.debug("CAPTURE_HOTKEY detected - entering capture mode")
                         # Split input around hotkey to preserve other characters
                         prefix, _, suffix = user_input.partition(CAPTURE_HOTKEY)
-                        if prefix: self.pty_process.write(prefix)
+                        if prefix:
+                            logger.debug(f"HOTKEY_PREFIX: {repr(prefix)}")
+                            self.pty_process.write(prefix)
                         self._enter_capture_mode()  # Enter hint overlay mode
-                        if suffix: self.pty_process.write(suffix)
+                        if suffix:
+                            logger.debug(f"HOTKEY_SUFFIX: {repr(suffix)}")
+                            self.pty_process.write(suffix)
                     else:
-                        # Forward input transparently to shell
-                        self.pty_process.write(user_input)
+                        # Enhanced Enter key handling for vim compatibility
+                        processed_input = user_input
+                        if user_input in (b'\n', b'\r\n') and self.in_alt_screen:
+                            # In vim alternative screen, try different Enter key approaches
+                            logger.debug("VIM_ENTER_ACTUAL_CONVERSION: Trying vim-compatible Enter")
+                            # Method 1: Send CR instead of LF (most common issue)
+                            if user_input == b'\n':
+                                processed_input = b'\r'
+                                logger.debug("VIM_ENTER_METHOD: LF -> CR conversion")
+                            # Method 2: Send both CR+LF for maximum compatibility
+                            elif user_input == b'\r\n':
+                                processed_input = b'\r'  # Simplify to just CR
+                                logger.debug("VIM_ENTER_METHOD: CRLF -> CR conversion")
+                        elif user_input == b'\r' and self.in_alt_screen:
+                            # CR is already correct for vim, keep as-is
+                            logger.debug("VIM_ENTER_METHOD: CR passed through unchanged")
+
+                        # Forward input (potentially modified) to shell
+                        logger.debug(f"FORWARDING_INPUT to PTY: {repr(processed_input)}")
+                        self.pty_process.write(processed_input)
                 except OSError: break
 
             # Handle shell output
@@ -374,9 +527,92 @@ class ShellCaptureTUI:
                 try:
                     pty_output = self.pty_process.read()
                     if not pty_output: break  # EOF
+
+                    # Decode and log the raw output
+                    decoded_output = pty_output.decode('utf-8', 'replace')
+                    logger.debug(f"PTY_OUTPUT: {repr(decoded_output)}")
+
+                    # Log ANSI escape sequences specifically
+                    ansi_sequences = re.findall(r'\x1b\[[?0-9;]*[a-zA-Z]', decoded_output)
+                    if ansi_sequences:
+                        logger.debug(f"ANSI_SEQUENCES: {ansi_sequences}")
+
+                    # Check for vim mode changes or file opening indicators
+                    if 'NERD_tree' in decoded_output:
+                        logger.debug("VIM_NERDTREE: NERDTree interface detected")
+                    if any(pattern in decoded_output for pattern in ['[No Name]', '.log', '.md', '.py']):
+                        logger.debug(f"VIM_FILE_INDICATOR: Possible file name detected in output")
+                    if '[New File]' in decoded_output or '[readonly]' in decoded_output:
+                        logger.debug("VIM_FILE_OPENED: File opening indicator detected")
+                    if any(mode in decoded_output for mode in ['-- INSERT --', '-- VISUAL --', '-- NORMAL --']):
+                        logger.debug(f"VIM_MODE_CHANGE: Mode indicator detected in output")
+
+                    # Handle alternative screen buffer sequences
+                    self._handle_alt_screen_sequences(decoded_output)
+
                     # Feed output to pyte for terminal emulation
-                    self.pyte_stream.feed(pty_output.decode('utf-8', 'replace'))
-                except EOFError: break
+                    self.pyte_stream.feed(decoded_output)
+
+                    # Log screen state changes
+                    logger.debug(f"SCREEN_LINES: {self.pyte_screen.lines}, COLUMNS: {self.pyte_screen.columns}")
+                    logger.debug(f"CURSOR_POS: ({self.pyte_screen.cursor.x}, {self.pyte_screen.cursor.y})")
+                    logger.debug(f"DIRTY_LINES: {list(self.pyte_screen.dirty)}")
+
+                except EOFError:
+                    logger.debug("PTY_EOF: End of file from PTY process")
+                    break
+
+    def _handle_alt_screen_sequences(self, output: str):
+        """Handle alternative screen buffer sequences for vim compatibility."""
+        # Check for alternative screen buffer enable (\x1b[?1049h)
+        if '\x1b[?1049h' in output:
+            logger.debug("ALT_SCREEN_ENABLE: Entering alternative screen buffer")
+            if not self.in_alt_screen:
+                # Save current main screen content
+                self.main_screen_content = self._capture_screen_state()
+                self.in_alt_screen = True
+                logger.debug("ALT_SCREEN_SAVED: Main screen content saved")
+
+        # Check for alternative screen buffer disable (\x1b[?1049l)
+        elif '\x1b[?1049l' in output:
+            logger.debug("ALT_SCREEN_DISABLE: Exiting alternative screen buffer")
+            if self.in_alt_screen and self.main_screen_content:
+                # Restore main screen content
+                self._restore_screen_state(self.main_screen_content)
+                self.in_alt_screen = False
+                logger.debug("ALT_SCREEN_RESTORED: Main screen content restored")
+
+    def _capture_screen_state(self) -> dict:
+        """Capture current screen state for later restoration."""
+        return {
+            'display': [self.pyte_screen.display[i] for i in range(self.pyte_screen.lines)],
+            'buffer': [[self.pyte_screen.buffer[y][x] for x in range(self.pyte_screen.columns)]
+                      for y in range(self.pyte_screen.lines)],
+            'cursor_x': self.pyte_screen.cursor.x,
+            'cursor_y': self.pyte_screen.cursor.y,
+        }
+
+    def _restore_screen_state(self, state: dict):
+        """Restore screen state from captured state."""
+        try:
+            # Clear current screen
+            self.pyte_screen.reset()
+
+            # Restore buffer content
+            for y in range(min(len(state['buffer']), self.pyte_screen.lines)):
+                for x in range(min(len(state['buffer'][y]), self.pyte_screen.columns)):
+                    self.pyte_screen.buffer[y][x] = state['buffer'][y][x]
+
+            # Restore cursor position
+            self.pyte_screen.cursor.x = state['cursor_x']
+            self.pyte_screen.cursor.y = state['cursor_y']
+
+            # Mark all lines as dirty for full redraw
+            self.pyte_screen.dirty = set(range(self.pyte_screen.lines))
+
+            logger.debug("SCREEN_STATE_RESTORED: Successfully restored main screen")
+        except Exception as e:
+            logger.error(f"SCREEN_RESTORE_ERROR: {e}")
 
     def _pyte_char_to_blessed(self, char: pyte_screens.Char) -> str:
         """
@@ -498,32 +734,47 @@ class ShellCaptureTUI:
     def _enter_capture_mode(self):
         """
         Enter capture mode with hint overlays for pattern selection.
-        
+
         This method:
         1. Captures current screen content (both plain text and styled)
         2. Creates CaptureUI for interactive hint-based selection
         3. Copies selected text to clipboard and shows status feedback
         """
+        logger.debug("=== CAPTURE_MODE_START ===")
+
         time.sleep(0.05)         # Brief pause to ensure screen is stable
         self._render(full=True)  # Force complete screen refresh
-        
+
         # Extract screen content in two formats:
         # 1. Plain text for pattern matching
         plain_lines = [self.pyte_screen.display[i].rstrip() for i in range(self.pyte_screen.lines)]
+        logger.debug(f"PLAIN_LINES_COUNT: {len(plain_lines)}")
+        logger.debug(f"PLAIN_CONTENT_SAMPLE: {repr(plain_lines[:3])}")
+
         # 2. Colored/styled text for display
         colored_lines = self._get_rendered_lines()
-        
+        logger.debug(f"COLORED_LINES_COUNT: {len(colored_lines)}")
+
         # Launch interactive capture UI
         capture_app = CaptureUI(self.term, plain_lines, colored_lines)
+        logger.debug(f"MATCHES_FOUND: {len(capture_app.matches)}")
+
         selected_text = capture_app.run()
-        
+        logger.debug(f"SELECTED_TEXT: {repr(selected_text)}")
+
         # Restore normal display and handle selection result
         self._render(full=True)
+        logger.debug("CAPTURE_MODE_SCREEN_RESTORED")
+
         if selected_text:
             if copy_to_clipboard(selected_text):
+                logger.debug(f"CLIPBOARD_SUCCESS: {repr(selected_text[:50])}")
                 self._flash(f"Copied: {selected_text[:50]}")
             else:
+                logger.debug("CLIPBOARD_FAILED")
                 self._flash("Failed to copy to clipboard")
+
+        logger.debug("=== CAPTURE_MODE_END ===")
 
     def _flash(self, message: str, duration: float = 1.2):
         self._flash_message_text = message
@@ -532,31 +783,38 @@ class ShellCaptureTUI:
 def main():
     """
     Entry point for shell-capture application.
-    
+
     Usage:
         shell-capture [command]    # Run specific command in capture wrapper
         shell-capture              # Start default shell in capture wrapper
-    
+
     Controls:
         Ctrl+E                     # Enter capture mode (hint overlay)
-        [hint keys]                # Select pattern in capture mode  
+        [hint keys]                # Select pattern in capture mode
         Escape/Ctrl+C              # Exit capture mode
         All other input            # Transparent pass-through to shell
     """
     # Parse command line arguments
     command = ' '.join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_SHELL
-    
+
+    logger.info(f"MAIN_START: args={sys.argv}, command={command}")
+
     # Create and run the TUI application
     app = ShellCaptureTUI(command)
-    try: 
+    try:
         app.run()
-    except KeyboardInterrupt: 
+    except KeyboardInterrupt:
+        logger.info("MAIN_INTERRUPTED: KeyboardInterrupt")
         pass  # Clean exit on Ctrl+C
-    except Exception:
+    except Exception as e:
+        logger.error(f"MAIN_EXCEPTION: {e}")
         import traceback
+        logger.error(f"MAIN_TRACEBACK: {traceback.format_exc()}")
         # Ensure terminal state is restored before printing traceback
         print(blessed.Terminal().normal)
         traceback.print_exc()
+    finally:
+        logger.info("MAIN_END")
 
 if __name__ == "__main__":
     main()
