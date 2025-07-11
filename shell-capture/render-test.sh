@@ -71,7 +71,7 @@ for ((i = 1; i <= ITERATIONS; i++)); do
         output_buffer="" # 清空緩衝區
 
         # 在左上角顯示進度，並清除到行尾
-        printf "\x1b[1;1H\x1b[KProgress: %d / %d" "$i" "$ITERATIONS"
+        printf "\x1b[1;1H\x1b[K\x1b[0mProgress: %d / %d" "$i" "$ITERATIONS"
     fi
 done
 
@@ -82,12 +82,10 @@ fi
 
 
 # --- Cleanup ---
-# 將游標移動到左下角
-printf "\x1b[%d;1H" "$ROWS"
 # 重置所有圖形屬性 (顏色等)
 tput sgr0
-# 清除從游標到螢幕結尾的所有內容
-tput ed
+# 清除螢幕
+tput clear
 # 顯示游標
 tput cnorm
 
