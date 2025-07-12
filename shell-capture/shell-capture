@@ -50,7 +50,15 @@ pyte.screens.Screen.select_graphic_rendition = patched_select_graphic_rendition
 def setup_logging():
     """Setup detailed logging for debugging terminal emulation issues."""
     logger = logging.getLogger("shell_capture")
-    logger.setLevel(logging.DEBUG)
+    
+    # Check DEBUG environment variable to set log level
+    debug_env = os.environ.get("DEBUG", "").lower()
+    if debug_env in ("1", "true", "yes", "on"):
+        log_level = logging.DEBUG
+    else:
+        log_level = logging.INFO
+    
+    logger.setLevel(log_level)
 
     # Create file handler for debug.log
     handler = logging.FileHandler("debug.log", mode="w")
@@ -71,7 +79,6 @@ def setup_logging():
 
 # Global logger instance
 logger = setup_logging()
-logger.setLevel(logging.DEBUG)  # Enable debug logging to track control character issues
 
 
 # --- Global Color Configuration (Gruvbox Style) ---
@@ -1311,10 +1318,12 @@ class ShellCaptureTUI:
         # Status bar should always be at the very bottom of terminal
         content_y = self.term.height - 1  # Always at the last line of terminal
 
-        # DEBUG: Add line number information for debugging
-        pyte_lines = self.pyte_screen.lines
-        terminal_height = self.term.height
-        debug_line_info = f"[L{content_y}/H{terminal_height}/P{pyte_lines}]"
+        # Conditional debug info based on log level
+        debug_line_info = ""
+        if logger.isEnabledFor(logging.DEBUG):
+            pyte_lines = self.pyte_screen.lines
+            terminal_height = self.term.height
+            debug_line_info = f"[L{content_y}/H{terminal_height}/P{pyte_lines}]"
 
         # Check if we have a temporary message to show
         if self._temp_status_message and time.time() < self._temp_status_expires:
