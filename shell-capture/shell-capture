@@ -75,23 +75,71 @@ logger.setLevel(logging.DEBUG)  # Enable debug logging to track control characte
 
 
 # --- Global Color Configuration (Gruvbox Style) ---
-class ColorConfig:
-    """Color configuration for hint system using Gruvbox theme."""
+class GruvboxColors:
+    """Gruvbox color palette."""
+    # Dark theme colors
+    BG = "#282828"
+    BG_SOFT = "#32302f"
+    BG_HARD = "#1d2021"
+    BG1 = "#3c3836"
+    BG2 = "#504945"
+    BG3 = "#665c54"
+    BG4 = "#7c6f64"
 
-    MATCH_HIGHLIGHT_BG = "#458588"  # Gruvbox blue background for highlighted matches
-    HINT_DEFAULT_FG = "#282828"  # Dark foreground for default hints
-    HINT_DEFAULT_BG = "#fabd2f"  # Yellow background for default hints
-    HINT_TYPED_FG = "#fbf1c7"  # Light foreground for typed hints
-    HINT_TYPED_BG = "#fb4934"  # Red background for typed hints
-    HINT_PENDING_FG = "#282828"  # Dark foreground for pending hints
-    HINT_PENDING_BG = "#d79921"  # Orange background for pending hints
-    HINT_INACTIVE_FG = "#7c6f64"  # Dim foreground for inactive hints
-    HINT_INACTIVE_BG = "#3c3836"  # Dark background for inactive hints
-    # --- Colors for the new flash message ---
-    FLASH_SUCCESS_FG = "#fbf1c7"
-    FLASH_SUCCESS_BG = "#98971a"
-    FLASH_ERROR_FG = "#fbf1c7"
-    FLASH_ERROR_BG = "#cc241d"
+    FG = "#ebdbb2"
+    FG0 = "#fbf1c7"
+    FG1 = "#ebdbb2"
+    FG2 = "#d5c4a1"
+    FG3 = "#bdae93"
+    FG4 = "#a89984"
+
+    # Bright colors
+    RED = "#fb4934"
+    GREEN = "#b8bb26"
+    YELLOW = "#fabd2f"
+    BLUE = "#83a598"
+    PURPLE = "#d3869b"
+    AQUA = "#8ec07c"
+    ORANGE = "#fe8019"
+
+    # Neutral colors
+    RED_DIM = "#cc241d"
+    GREEN_DIM = "#98971a"
+    YELLOW_DIM = "#d79921"
+    BLUE_DIM = "#458588"
+    PURPLE_DIM = "#b16286"
+    AQUA_DIM = "#689d6a"
+    ORANGE_DIM = "#d65d0e"
+
+
+class ColorConfig:
+    """Color configuration for UI components using Gruvbox theme."""
+
+    # Match highlighting
+    MATCH_HIGHLIGHT_BG = GruvboxColors.BLUE_DIM
+
+    # Hint system colors
+    HINT_DEFAULT_FG = GruvboxColors.BG
+    HINT_DEFAULT_BG = GruvboxColors.YELLOW
+    HINT_TYPED_FG = GruvboxColors.FG0
+    HINT_TYPED_BG = GruvboxColors.RED
+    HINT_PENDING_FG = GruvboxColors.BG
+    HINT_PENDING_BG = GruvboxColors.YELLOW_DIM
+    HINT_INACTIVE_FG = GruvboxColors.BG4
+    HINT_INACTIVE_BG = GruvboxColors.BG1
+
+    # Flash message colors
+    FLASH_SUCCESS_FG = GruvboxColors.FG0
+    FLASH_SUCCESS_BG = GruvboxColors.GREEN_DIM
+    FLASH_ERROR_FG = GruvboxColors.FG0
+    FLASH_ERROR_BG = GruvboxColors.RED_DIM
+
+    # Status bar colors (higher contrast)
+    STATUS_BAR_FG = GruvboxColors.FG0        # Bright white text
+    STATUS_BAR_BG = GruvboxColors.BG         # Dark background
+    STATUS_BAR_BORDER_FG = GruvboxColors.BG3 # Medium gray border
+    STATUS_BAR_INFO_FG = GruvboxColors.YELLOW # Bright yellow for info
+    STATUS_BAR_COUNT_FG = GruvboxColors.GREEN # Bright green for counts
 
 
 # --- Configuration and Constants ---
@@ -105,6 +153,10 @@ REGEX_PATTERNS = {
     "GIT_COMMIT": r"\b[0-9a-f]{7,40}\b",
     "EMAIL": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
 }
+
+# Status bar configuration
+STATUS_BAR_ENABLED = True  # Can be configured to disable status bar
+STATUS_BAR_HEIGHT = 1  # Height of the status bar in lines
 
 
 # --- Helper Functions ---
@@ -386,9 +438,11 @@ class ShellCaptureTUI:
 
         # Terminal emulation using pyte library with history support
         # HistoryScreen provides scrollback buffer and better vim compatibility
+        # Reserve space for status bar if enabled (reduce by STATUS_BAR_HEIGHT + 1)
+        available_height = self.term.height - (STATUS_BAR_HEIGHT if STATUS_BAR_ENABLED else 0)
         self.pyte_screen = pyte_screens.HistoryScreen(
             columns=self.term.width,
-            lines=self.term.height,
+            lines=available_height,
             history=1000,  # Keep 1000 lines of scrollback history for terminal restoration
             ratio=0.5,  # Scroll half-screen at a time
         )
@@ -402,11 +456,21 @@ class ShellCaptureTUI:
 
         # Application state
         self.command = command  # Shell command to execute
+        self.in_capture_mode = False  # Track capture mode state
+
         # ADDED: Attributes for the flash message feature
         self._flash_message_text: Optional[str] = None
         self._flash_message_expires: float = 0
         self._flash_message_style = ""
-        
+
+        # Status bar attributes
+        self._status_bar_enabled = STATUS_BAR_ENABLED
+        self._status_message = ""
+        self._match_count = 0
+        self._temp_status_message = ""  # Temporary message shown in status bar
+        self._temp_status_expires = 0
+        self._temp_status_style = ""
+
         # Performance optimization attributes
         self._style_cache = {}  # Cache for computed styles to avoid recalculation
         self._last_render_time = 0  # For render throttling
@@ -417,9 +481,12 @@ class ShellCaptureTUI:
     def _handle_sigwinch(self, signum, frame):
         """Handle terminal window resize events (SIGWINCH signal)."""
         h, w = self.term.height, self.term.width
+        # Calculate available height for shell content (excluding status bar)
+        available_height = h - (STATUS_BAR_HEIGHT if self._status_bar_enabled else 0)
+
         if self.pty_process:
-            self.pty_process.setwinsize(h, w)  # Update PTY dimensions
-        self.pyte_screen.resize(lines=h, columns=w)  # Update screen buffer size
+            self.pty_process.setwinsize(available_height, w)  # Update PTY dimensions
+        self.pyte_screen.resize(lines=available_height, columns=w)  # Update screen buffer size
         # Clear style cache on resize as terminal properties may change
         self._style_cache.clear()
         self._render(full=True)  # Force full screen redraw
@@ -446,7 +513,7 @@ class ShellCaptureTUI:
                 logger.debug(f"SIGCONT forwarded to PTY process group {self.pty_process.pid}")
             except (ProcessLookupError, OSError) as e:
                 logger.debug(f"Failed to forward SIGCONT: {e}")
-        
+
         # Refresh screen after resume
         self._render(full=True)
 
@@ -461,15 +528,16 @@ class ShellCaptureTUI:
         env["COLORTERM"] = "truecolor"
         # Ensure vim recognizes proper terminal capabilities
         env["VIM_TERMINAL"] = "1"
-        # Set consistent terminal size
-        env["LINES"] = str(self.term.height)
+        # Set consistent terminal size (exclude status bar from shell area)
+        available_height = self.term.height - (STATUS_BAR_HEIGHT if self._status_bar_enabled else 0)
+        env["LINES"] = str(available_height)
         env["COLUMNS"] = str(self.term.width)
         logger.debug(f"ENV_SETUP: TERM={env['TERM']}, COLORTERM={env.get('COLORTERM')}")
 
         try:
             self.pty_process = ptyprocess.PtyProcess.spawn(
                 [DEFAULT_SHELL, "-c", self.command],
-                dimensions=(self.term.height, self.term.width),
+                dimensions=(available_height, self.term.width),
                 env=env,
             )
             logger.debug(f"PTY_PROCESS_SPAWNED: pid={self.pty_process.pid}")
@@ -511,7 +579,7 @@ class ShellCaptureTUI:
 
         # In raw mode, we still need SIGWINCH for window resize
         signal.signal(signal.SIGWINCH, self._handle_sigwinch)
-        
+
         # Note: Raw mode disables most signal processing, which is what we want for ZLE
         # Ctrl+Y, Ctrl+O etc will be processed as raw bytes, not signals
         logger.debug("SIGNAL_HANDLER_REGISTERED: SIGWINCH only (raw mode disables other signals)")
@@ -540,14 +608,23 @@ class ShellCaptureTUI:
         """
         pty_fd = self.pty_process.fd
         while self.pty_process.isalive():
-            # Check for flash message expiration and trigger redraw if needed.
+            # Check for flash message and temp status expiration
             needs_render = False
-            if self._flash_message_text and time.time() > self._flash_message_expires:
-                self._flash_message_text = None
-                needs_render = True  # Schedule a redraw to clear the message.
+            current_time = time.time()
 
-            # Only render if necessary or if there's a pending render request
-            if needs_render or self._pending_render or self.pyte_screen.dirty:
+            if self._flash_message_text and current_time > self._flash_message_expires:
+                self._flash_message_text = None
+                needs_render = True
+
+            if self._temp_status_message and current_time > self._temp_status_expires:
+                self._temp_status_message = ""
+                needs_render = True
+
+            # Always render if we have status bar or message changes
+            should_render = (needs_render or self._pending_render or
+                           self.pyte_screen.dirty or self._status_bar_enabled)
+
+            if should_render:
                 self._render(full=needs_render)
 
             # Use select() for non-blocking I/O monitoring with optimized timeout
@@ -569,7 +646,7 @@ class ShellCaptureTUI:
 
                     # Log user input with detailed analysis
                     logger.debug(f"USER_INPUT: {repr(user_input)}")
-                    
+
                     # Enhanced control character debugging
                     if len(user_input) == 1 and user_input[0] < 32:
                         ctrl_char = user_input[0]
@@ -582,14 +659,14 @@ class ShellCaptureTUI:
                             26: "Ctrl+Z", 27: "ESC", 28: "Ctrl+\\", 29: "Ctrl+]", 30: "Ctrl+^", 31: "Ctrl+_"
                         }.get(ctrl_char, f"Unknown_Ctrl_{ctrl_char}")
                         logger.debug(f"CONTROL_CHARACTER: {ctrl_name} (byte={ctrl_char}, hex=0x{ctrl_char:02x})")
-                        
+
                         # Special attention to ZLE control characters
                         if ctrl_char in [15, 25]:  # Ctrl+O, Ctrl+Y
                             logger.debug(f"ZLE_CONTROL_CHAR: {ctrl_name} - this should be forwarded to shell for ZLE handling")
-                        
+
                         # Log ALL control characters for debugging
                         logger.debug(f"CTRL_CHAR_DETAILS: {ctrl_name} should map to byte {ctrl_char} (0x{ctrl_char:02x})")
-                        
+
                         # Check if this is being processed as signal vs byte
                         logger.debug(f"PROCESSING_MODE: This control char is being processed as RAW_BYTE (not signal)")
                         logger.debug(f"TERMINAL_MODE: cbreak() mode - some ctrl chars may become signals instead of bytes")
@@ -650,18 +727,18 @@ class ShellCaptureTUI:
                     logger.debug(
                         f"RAW_BYTES: {[hex(b) for b in user_input]} decimal={[b for b in user_input]}"
                     )
-                    
+
                     # Special debugging for specific control chars we're looking for
                     if len(user_input) == 1:
                         if user_input[0] == 15:  # Ctrl+O
                             logger.debug("FOUND_CTRL_O: This is the Ctrl+O we're looking for!")
-                        elif user_input[0] == 25:  # Ctrl+Y  
+                        elif user_input[0] == 25:  # Ctrl+Y
                             logger.debug("FOUND_CTRL_Y: This is the Ctrl+Y we're looking for!")
                         elif user_input[0] == 14:  # Ctrl+N
                             logger.debug("FOUND_CTRL_N: This might be related to Ctrl+O processing")
                         elif user_input[0] == 79:  # Capital O
                             logger.debug("FOUND_CAPITAL_O: This might be Ctrl+O being processed as Shift+O")
-                    
+
                     # Check for multi-byte sequences that might contain Ctrl+O
                     if b'\x0f' in user_input:  # \x0f is Ctrl+O
                         logger.debug("CTRL_O_IN_SEQUENCE: Found Ctrl+O byte in multi-byte sequence")
@@ -706,13 +783,13 @@ class ShellCaptureTUI:
                         logger.debug(
                             f"FORWARDING_INPUT to PTY: {repr(processed_input)}"
                         )
-                        
+
                         # Additional debug for ZLE control characters
                         if len(processed_input) == 1 and processed_input[0] in [15, 25]:  # Ctrl+O, Ctrl+Y
                             ctrl_name = "Ctrl+O" if processed_input[0] == 15 else "Ctrl+Y"
                             logger.debug(f"ZLE_FORWARD: Sending {ctrl_name} byte to PTY for ZLE processing")
                             logger.debug(f"ZLE_EXPECTATION: Shell should receive this as raw byte and process via ZLE bindings")
-                        
+
                         self.pty_process.write(processed_input)
                 except OSError:
                     break
@@ -837,14 +914,14 @@ class ShellCaptureTUI:
         """
         # Create a cache key from character attributes
         cache_key = (
-            str(char.fg), str(char.bg), 
+            str(char.fg), str(char.bg),
             char.bold, char.italics, char.underscore, char.reverse
         )
-        
+
         # Check cache first
         if cache_key in self._style_cache:
             return self._style_cache[cache_key]
-            
+
         style = ""
 
         pyte_to_blessed_names = {
@@ -916,7 +993,7 @@ class ShellCaptureTUI:
 
         # Cache the computed style for future use
         self._style_cache[cache_key] = style
-        
+
         # Periodic cache cleanup to prevent memory growth
         self._cache_clear_counter += 1
         if self._cache_clear_counter > 1000:  # Clear cache every 1000 style computations
@@ -925,31 +1002,40 @@ class ShellCaptureTUI:
                 items = list(self._style_cache.items())
                 self._style_cache = dict(items[-100:])
             self._cache_clear_counter = 0
-            
+
         return style
 
     def _render(self, full=False, force=False):
         """Renders the pyte screen to the physical terminal using blessed with throttling."""
         current_time = time.time()
-        
+
         # Implement render throttling unless forced or full refresh
         if not force and not full:
             if current_time - self._last_render_time < self._render_interval:
                 self._pending_render = True  # Mark for later rendering
                 return
-        
+
         self._last_render_time = current_time
         self._pending_render = False
-        
+
+        # Calculate available rendering area (exclude status bar if enabled)
+        max_lines = self.pyte_screen.lines
+        # Note: pyte_screen.lines already accounts for status bar space
+        # so we don't need to subtract again here
+
         lines_to_draw = (
-            range(self.pyte_screen.lines) if full else self.pyte_screen.dirty
+            range(max_lines) if full else [y for y in self.pyte_screen.dirty if y < max_lines]
         )
 
         # MODIFIED: A render is also needed if there's a flash message to draw or clear.
         flash_is_active = (
             self._flash_message_text and time.time() < self._flash_message_expires
         )
-        if not lines_to_draw and not flash_is_active and not full:
+        # Also check if temp status is active
+        temp_status_active = (
+            self._temp_status_message and time.time() < self._temp_status_expires
+        )
+        if not lines_to_draw and not flash_is_active and not temp_status_active and not full:
             if self.pyte_screen.cursor.hidden:
                 print(self.term.hide_cursor(), end="")
             else:
@@ -966,16 +1052,18 @@ class ShellCaptureTUI:
         with self.term.hidden_cursor():
             # Batch render all lines in one go for better performance
             output_buffer = []
-            
+
             for y in lines_to_draw:
                 line = self.pyte_screen.buffer[y]
-                output_line = self.term.move_xy(0, y)
-                
+                # Map pyte screen coordinates to terminal coordinates
+                terminal_y = y  # pyte screen already accounts for available height
+                output_line = self.term.move_xy(0, terminal_y)
+
                 # Optimize: process line in chunks of similar styles
                 current_style = "UNSET"
                 segment = ""
                 needs_reset = False
-                
+
                 for x in range(self.pyte_screen.columns):
                     char = line[x]
                     # Skip empty characters optimization
@@ -989,9 +1077,9 @@ class ShellCaptureTUI:
                         else:
                             segment += char.data
                         continue
-                    
+
                     style = self._pyte_char_to_blessed(char)
-                    
+
                     if style != current_style:
                         if segment:
                             if current_style == "UNSET":
@@ -1018,25 +1106,25 @@ class ShellCaptureTUI:
 
                 output_line += self.term.clear_eol
                 output_buffer.append(output_line)
-            
+
             # Print all lines at once
             print(''.join(output_buffer), end="")
 
             self.pyte_screen.dirty.clear()
 
-            # ADDED: Render the temporary flash message at the bottom of the screen.
-            if flash_is_active:
-                message = f" {self._flash_message_text} "
-                # Center the message at the bottom line of the terminal.
-                x_pos = (self.term.width - len(message)) // 2
-                y_pos = self.term.height - 1
-                print(
-                    self.term.move_xy(x_pos, y_pos)
-                    + self._flash_message_style
-                    + message
-                    + self.term.normal,
-                    end="",
-                )
+            # Clear the status bar area before rendering (prevent text overlap)
+            if self._status_bar_enabled:
+                # Clear all lines where status bar will be rendered
+                for i in range(STATUS_BAR_HEIGHT):
+                    y_pos = self.term.height - STATUS_BAR_HEIGHT + i
+                    print(self.term.move_xy(0, y_pos) + self.term.clear_eol, end="")
+
+                # ADDED: Render the status bar
+                status_bar_output = self._render_status_bar()
+                print(status_bar_output, end="")
+
+            # NOTE: Flash messages are now integrated into status bar
+            # No separate flash message rendering needed
 
         if not self.pyte_screen.cursor.hidden:
             print(
@@ -1070,7 +1158,7 @@ class ShellCaptureTUI:
                     else:
                         segment += char.data
                     continue
-                
+
                 style = self._pyte_char_to_blessed(char)
                 if style != current_style:
                     if segment:
@@ -1108,6 +1196,9 @@ class ShellCaptureTUI:
         """
         logger.debug("=== CAPTURE_MODE_START ===")
 
+        # Set capture mode state
+        self.in_capture_mode = True
+
         time.sleep(0.05)  # Brief pause to ensure screen is stable
         self._render(full=True)  # Force complete screen refresh
 
@@ -1127,26 +1218,40 @@ class ShellCaptureTUI:
         capture_app = CaptureUI(self.term, plain_lines, colored_lines)
         logger.debug(f"MATCHES_FOUND: {len(capture_app.matches)}")
 
+        # Update match count for status bar (count unique content)
+        unique_content = set(match["text"] for match in capture_app.matches)
+        self._match_count = len(unique_content)
+        logger.debug(f"UNIQUE_MATCHES: {self._match_count}")
+
+        # Force a render to show the updated status bar with match count
+        self._render(full=True)
+
         selected_text = capture_app.run()
         logger.debug(f"SELECTED_TEXT: {repr(selected_text)}")
 
-        # Restore normal display and handle selection result
+        # Exit capture mode and restore normal display
+        self.in_capture_mode = False
+        self._match_count = 0
         self._render(full=True)
         logger.debug("CAPTURE_MODE_SCREEN_RESTORED")
 
         if selected_text:
             if copy_to_clipboard(selected_text):
                 logger.debug(f"CLIPBOARD_SUCCESS: {repr(selected_text[:50])}")
-                # MODIFIED: Use the new flash message system for user feedback.
+                # Show success message in status bar
                 short_text = (
                     (selected_text[:40] + "...")
                     if len(selected_text) > 43
                     else selected_text
                 )
-                self._flash(f"Copied: {short_text}", style_type="success")
+                self._set_temp_status(f"✓ Copied: {short_text}", duration=3.0, style_type="success")
             else:
                 logger.debug("CLIPBOARD_FAILED")
-                self._flash("Failed to copy to clipboard", style_type="error")
+                self._set_temp_status("✗ Failed to copy to clipboard", duration=3.0, style_type="error")
+        else:
+            # Show exit notification when no text was selected
+            logger.debug("CAPTURE_MODE_CANCELLED")
+            self._set_temp_status("Capture mode exited", duration=1.5, style_type="success")
 
         logger.debug("=== CAPTURE_MODE_END ===")
 
@@ -1183,6 +1288,124 @@ class ShellCaptureTUI:
 
         self._render()  # Trigger a render to show the message immediately.
 
+    def _render_status_bar(self) -> str:
+        """Render vim-style status bar that truly occupies bottom space."""
+        if not self._status_bar_enabled:
+            return ""
+
+        try:
+            # Create styled background with higher contrast
+            bg_style = (self.term.color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_FG)) +
+                       self.term.on_color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_BG)))
+            info_style = self.term.color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_INFO_FG)) + \
+                        self.term.on_color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_BG))
+            count_style = self.term.color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_COUNT_FG)) + \
+                         self.term.on_color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_BG))
+        except ValueError:
+            # Fallback to basic colors
+            bg_style = self.term.on_black + self.term.white
+            info_style = self.term.on_black + self.term.bright_yellow
+            count_style = self.term.on_black + self.term.bright_green
+
+        width = self.term.width
+        # Status bar should always be at the very bottom of terminal
+        content_y = self.term.height - 1  # Always at the last line of terminal
+
+        # DEBUG: Add line number information for debugging
+        pyte_lines = self.pyte_screen.lines
+        terminal_height = self.term.height
+        debug_line_info = f"[L{content_y}/H{terminal_height}/P{pyte_lines}]"
+
+        # Check if we have a temporary message to show
+        if self._temp_status_message and time.time() < self._temp_status_expires:
+            # Show temporary message in status bar
+            left_content = f"{debug_line_info} shell-capture "
+            middle_content = f" {self._temp_status_message} "
+            right_content = f" "
+            # Use temp status style if available
+            if self._temp_status_style == "error":
+                count_style = self.term.color_rgb(*hex_to_rgb(GruvboxColors.RED)) + \
+                             self.term.on_color_rgb(*hex_to_rgb(ColorConfig.STATUS_BAR_BG))
+        elif self.in_capture_mode:
+            # Show match count in capture mode
+            unique_count = self._match_count
+            left_content = f"{debug_line_info} CAPTURE "
+            middle_content = f" {unique_count} matches "
+            right_content = f" Press ESC to exit "
+        else:
+            # Show command info in normal mode
+            shell_name = self.command.split()[-1] if self.command != DEFAULT_SHELL else "shell"
+            left_content = f"{debug_line_info} shell-capture "
+            middle_content = f" {shell_name} "
+            right_content = f" Ctrl+E to capture "
+
+        # Calculate positioning for vim-style layout
+        left_len = len(left_content)
+        right_len = len(right_content)
+        middle_len = len(middle_content)
+        total_content_len = left_len + middle_len + right_len
+        remaining_space = max(0, width - total_content_len)
+
+        # Create multiple lines for status bar based on STATUS_BAR_HEIGHT
+        status_lines = []
+
+        for i in range(STATUS_BAR_HEIGHT):
+            line_y = self.term.height - STATUS_BAR_HEIGHT + i
+
+            if i == 0:  # First line contains the actual content (top of status bar)
+                # Create the content line with proper background fill
+                content_line = bg_style  # Start with background
+                content_line += info_style + left_content
+                content_line += count_style + middle_content
+                content_line += bg_style + " " * remaining_space  # Fill middle space
+                content_line += info_style + right_content
+
+                # Ensure exact terminal width with background fill
+                content_padding = width - (left_len + middle_len + remaining_space + right_len)
+                if content_padding > 0:
+                    content_line += bg_style + " " * content_padding
+
+                content_line += self.term.normal
+                status_lines.append(self.term.move_xy(0, line_y) + content_line)
+            else:
+                # Fill other lines with background color only
+                bg_line = bg_style + " " * width + self.term.normal
+                status_lines.append(self.term.move_xy(0, line_y) + bg_line)
+
+        # Return all status bar lines
+        return "".join(status_lines)
+
+    def _update_status_message(self, message: str = ""):
+        """Update status bar message."""
+        self._status_message = message
+
+    def _set_temp_status(self, message: str, duration: float = 2.0, style_type: str = "success"):
+        """Set a temporary message in the status bar."""
+        self._temp_status_message = message
+        self._temp_status_expires = time.time() + duration
+        self._temp_status_style = style_type
+        self._render()  # Trigger immediate render
+
+    def toggle_status_bar(self):
+        """Toggle status bar visibility and adjust screen dimensions."""
+        self._status_bar_enabled = not self._status_bar_enabled
+
+        # Recalculate screen dimensions
+        h, w = self.term.height, self.term.width
+        available_height = h - (STATUS_BAR_HEIGHT if self._status_bar_enabled else 0)
+
+        if self.pty_process:
+            self.pty_process.setwinsize(available_height, w)
+        self.pyte_screen.resize(lines=available_height, columns=w)
+
+        # Show notification
+        status = "enabled" if self._status_bar_enabled else "disabled"
+        if self._status_bar_enabled:
+            self._set_temp_status(f"Status bar {status}", duration=1.0, style_type="success")
+
+        # Force full redraw
+        self._render(full=True)
+
 
 def main():
     """
@@ -1197,6 +1420,12 @@ def main():
         [hint keys]                # Select pattern in capture mode
         Escape/Ctrl+C              # Exit capture mode
         All other input            # Transparent pass-through to shell
+
+    Features:
+        - Status bar showing command info and capture mode status
+        - Unique match count display during capture mode
+        - Copy success/failure notifications
+        - Configurable status bar (enabled by default)
     """
     # Parse command line arguments
     command = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_SHELL
