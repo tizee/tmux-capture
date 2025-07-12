@@ -71,7 +71,7 @@ def setup_logging():
 
 # Global logger instance
 logger = setup_logging()
-logger.setLevel(logging.CRITICAL)
+logger.setLevel(logging.DEBUG)  # Enable debug logging to track control character issues
 
 
 # --- Global Color Configuration (Gruvbox Style) ---
@@ -424,6 +424,33 @@ class ShellCaptureTUI:
         self._style_cache.clear()
         self._render(full=True)  # Force full screen redraw
 
+    def _handle_sigtstp(self, signum, frame):
+        """Handle Ctrl-Y (SIGTSTP) - forward to PTY process for shell to handle."""
+        logger.debug("SIGTSTP received - forwarding to PTY process for shell handling")
+        logger.debug("SIGNAL_SOURCE: This means Ctrl+Y was processed as SIGNAL, not as raw byte")
+        if self.pty_process and self.pty_process.isalive():
+            try:
+                # Forward SIGTSTP to the shell process in PTY
+                os.killpg(self.pty_process.pid, signal.SIGTSTP)
+                logger.debug(f"SIGTSTP forwarded to PTY process group {self.pty_process.pid}")
+            except (ProcessLookupError, OSError) as e:
+                logger.debug(f"Failed to forward SIGTSTP: {e}")
+
+    def _handle_sigcont(self, signum, frame):
+        """Handle continuation signal - forward to PTY process."""
+        logger.debug("SIGCONT received - forwarding to PTY process")
+        if self.pty_process and self.pty_process.isalive():
+            try:
+                # Forward SIGCONT to the shell process in PTY
+                os.killpg(self.pty_process.pid, signal.SIGCONT)
+                logger.debug(f"SIGCONT forwarded to PTY process group {self.pty_process.pid}")
+            except (ProcessLookupError, OSError) as e:
+                logger.debug(f"Failed to forward SIGCONT: {e}")
+        
+        # Refresh screen after resume
+        self._render(full=True)
+
+
     def run(self):
         logger.info(f"=== SHELL_CAPTURE_START: command={self.command} ===")
         logger.debug(f"TERMINAL_SIZE: {self.term.width}x{self.term.height}")
@@ -482,18 +509,24 @@ class ShellCaptureTUI:
             print(f"Failed to start PTY process: {e}", file=sys.stderr)
             return
 
+        # In raw mode, we still need SIGWINCH for window resize
         signal.signal(signal.SIGWINCH, self._handle_sigwinch)
-        logger.debug("SIGNAL_HANDLER_REGISTERED: SIGWINCH")
+        
+        # Note: Raw mode disables most signal processing, which is what we want for ZLE
+        # Ctrl+Y, Ctrl+O etc will be processed as raw bytes, not signals
+        logger.debug("SIGNAL_HANDLER_REGISTERED: SIGWINCH only (raw mode disables other signals)")
+        logger.debug("RAW_MODE: All control characters will be processed as raw bytes for ZLE compatibility")
 
-        with self.term.fullscreen(), self.term.cbreak():
-            logger.debug("TERMINAL_MODE: fullscreen + cbreak enabled")
-            try:
+        # Use raw mode for complete control character handling (needed for ZLE)
+        try:
+            with self.term.fullscreen(), self.term.raw():
+                logger.debug("TERMINAL_MODE: fullscreen + raw enabled for complete ZLE compatibility")
                 self._main_loop()
-            finally:
-                logger.debug("CLEANUP: terminating PTY process")
-                if self.pty_process and self.pty_process.isalive():
-                    self.pty_process.terminate(force=True)
-                logger.info("=== SHELL_CAPTURE_END ===")
+        finally:
+            logger.debug("CLEANUP: terminating PTY process")
+            if self.pty_process and self.pty_process.isalive():
+                self.pty_process.terminate(force=True)
+            logger.info("=== SHELL_CAPTURE_END ===")
 
     def _main_loop(self):
         """
@@ -536,6 +569,31 @@ class ShellCaptureTUI:
 
                     # Log user input with detailed analysis
                     logger.debug(f"USER_INPUT: {repr(user_input)}")
+                    
+                    # Enhanced control character debugging
+                    if len(user_input) == 1 and user_input[0] < 32:
+                        ctrl_char = user_input[0]
+                        ctrl_name = {
+                            1: "Ctrl+A", 2: "Ctrl+B", 3: "Ctrl+C", 4: "Ctrl+D", 5: "Ctrl+E",
+                            6: "Ctrl+F", 7: "Ctrl+G", 8: "Ctrl+H", 9: "Ctrl+I", 10: "Ctrl+J",
+                            11: "Ctrl+K", 12: "Ctrl+L", 13: "Ctrl+M", 14: "Ctrl+N", 15: "Ctrl+O",
+                            16: "Ctrl+P", 17: "Ctrl+Q", 18: "Ctrl+R", 19: "Ctrl+S", 20: "Ctrl+T",
+                            21: "Ctrl+U", 22: "Ctrl+V", 23: "Ctrl+W", 24: "Ctrl+X", 25: "Ctrl+Y",
+                            26: "Ctrl+Z", 27: "ESC", 28: "Ctrl+\\", 29: "Ctrl+]", 30: "Ctrl+^", 31: "Ctrl+_"
+                        }.get(ctrl_char, f"Unknown_Ctrl_{ctrl_char}")
+                        logger.debug(f"CONTROL_CHARACTER: {ctrl_name} (byte={ctrl_char}, hex=0x{ctrl_char:02x})")
+                        
+                        # Special attention to ZLE control characters
+                        if ctrl_char in [15, 25]:  # Ctrl+O, Ctrl+Y
+                            logger.debug(f"ZLE_CONTROL_CHAR: {ctrl_name} - this should be forwarded to shell for ZLE handling")
+                        
+                        # Log ALL control characters for debugging
+                        logger.debug(f"CTRL_CHAR_DETAILS: {ctrl_name} should map to byte {ctrl_char} (0x{ctrl_char:02x})")
+                        
+                        # Check if this is being processed as signal vs byte
+                        logger.debug(f"PROCESSING_MODE: This control char is being processed as RAW_BYTE (not signal)")
+                        logger.debug(f"TERMINAL_MODE: cbreak() mode - some ctrl chars may become signals instead of bytes")
+                        logger.debug(f"FORWARDING_DECISION: Will forward this byte directly to PTY for ZLE processing")
 
                     # Enhanced Enter key handling for vim compatibility
                     if user_input in (b"\r", b"\n", b"\r\n"):
@@ -592,6 +650,23 @@ class ShellCaptureTUI:
                     logger.debug(
                         f"RAW_BYTES: {[hex(b) for b in user_input]} decimal={[b for b in user_input]}"
                     )
+                    
+                    # Special debugging for specific control chars we're looking for
+                    if len(user_input) == 1:
+                        if user_input[0] == 15:  # Ctrl+O
+                            logger.debug("FOUND_CTRL_O: This is the Ctrl+O we're looking for!")
+                        elif user_input[0] == 25:  # Ctrl+Y  
+                            logger.debug("FOUND_CTRL_Y: This is the Ctrl+Y we're looking for!")
+                        elif user_input[0] == 14:  # Ctrl+N
+                            logger.debug("FOUND_CTRL_N: This might be related to Ctrl+O processing")
+                        elif user_input[0] == 79:  # Capital O
+                            logger.debug("FOUND_CAPITAL_O: This might be Ctrl+O being processed as Shift+O")
+                    
+                    # Check for multi-byte sequences that might contain Ctrl+O
+                    if b'\x0f' in user_input:  # \x0f is Ctrl+O
+                        logger.debug("CTRL_O_IN_SEQUENCE: Found Ctrl+O byte in multi-byte sequence")
+                    if b'\x19' in user_input:  # \x19 is Ctrl+Y
+                        logger.debug("CTRL_Y_IN_SEQUENCE: Found Ctrl+Y byte in multi-byte sequence")
 
                     # Check for capture hotkey (Ctrl+E)
                     if CAPTURE_HOTKEY in user_input:
@@ -631,6 +706,13 @@ class ShellCaptureTUI:
                         logger.debug(
                             f"FORWARDING_INPUT to PTY: {repr(processed_input)}"
                         )
+                        
+                        # Additional debug for ZLE control characters
+                        if len(processed_input) == 1 and processed_input[0] in [15, 25]:  # Ctrl+O, Ctrl+Y
+                            ctrl_name = "Ctrl+O" if processed_input[0] == 15 else "Ctrl+Y"
+                            logger.debug(f"ZLE_FORWARD: Sending {ctrl_name} byte to PTY for ZLE processing")
+                            logger.debug(f"ZLE_EXPECTATION: Shell should receive this as raw byte and process via ZLE bindings")
+                        
                         self.pty_process.write(processed_input)
                 except OSError:
                     break
@@ -892,6 +974,7 @@ class ShellCaptureTUI:
                 # Optimize: process line in chunks of similar styles
                 current_style = "UNSET"
                 segment = ""
+                needs_reset = False
                 
                 for x in range(self.pyte_screen.columns):
                     char = line[x]
@@ -902,6 +985,7 @@ class ShellCaptureTUI:
                                 output_line += self.term.normal + current_style + segment
                             segment = char.data
                             current_style = "UNSET"
+                            needs_reset = True
                         else:
                             segment += char.data
                         continue
@@ -911,7 +995,11 @@ class ShellCaptureTUI:
                     if style != current_style:
                         if segment:
                             if current_style == "UNSET":
-                                output_line += segment  # No style needed for default chars
+                                if needs_reset:
+                                    output_line += self.term.normal + segment
+                                    needs_reset = False
+                                else:
+                                    output_line += segment
                             else:
                                 output_line += self.term.normal + current_style + segment
                         segment = char.data
@@ -921,7 +1009,10 @@ class ShellCaptureTUI:
 
                 if segment:
                     if current_style == "UNSET":
-                        output_line += segment
+                        if needs_reset:
+                            output_line += self.term.normal + segment
+                        else:
+                            output_line += segment
                     else:
                         output_line += self.term.normal + current_style + segment
 
@@ -965,6 +1056,7 @@ class ShellCaptureTUI:
             output_line = ""
             current_style = "UNSET"
             segment = ""
+            needs_reset = False
             for x in range(self.pyte_screen.columns):
                 char = line[x]
                 # Apply same optimization as main render method
@@ -974,6 +1066,7 @@ class ShellCaptureTUI:
                             output_line += self.term.normal + current_style + segment
                         segment = char.data
                         current_style = "UNSET"
+                        needs_reset = True
                     else:
                         segment += char.data
                     continue
@@ -982,7 +1075,11 @@ class ShellCaptureTUI:
                 if style != current_style:
                     if segment:
                         if current_style == "UNSET":
-                            output_line += segment
+                            if needs_reset:
+                                output_line += self.term.normal + segment
+                                needs_reset = False
+                            else:
+                                output_line += segment
                         else:
                             output_line += self.term.normal + current_style + segment
                     segment = char.data
@@ -991,7 +1088,10 @@ class ShellCaptureTUI:
                     segment += char.data
             if segment:
                 if current_style == "UNSET":
-                    output_line += segment
+                    if needs_reset:
+                        output_line += self.term.normal + segment
+                    else:
+                        output_line += segment
                 else:
                     output_line += self.term.normal + current_style + segment
             rendered_lines.append(output_line)

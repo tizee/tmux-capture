@@ -62,10 +62,11 @@
 - **实现**: select-based I/O多路复用，避免阻塞
 - **优化**: 针对vim的Enter键处理优化 (LF->CR转换)
 
-### 3. 快捷键检测
+### 3. 用户按键和信号处理
 - **触发键**: Ctrl+E (可配置)
 - **检测方式**: 监听原始键盘输入
 - **状态切换**: Normal Mode ↔ Capture Mode
+- **信号处理**: 透明转发job control信号 (SIGTSTP/SIGCONT)
 
 ### 4. 屏幕内容缓冲
 - **缓冲策略**: pyte终端仿真，完整的2D屏幕缓冲
@@ -135,7 +136,7 @@ shell-capture/
 - [x] 替代屏幕缓冲区支持 (vim模式)
 - [x] Gruvbox主题集成
 - [x] 详细的调试日志系统
-- [x] 信号处理 (SIGWINCH)
+- [x] 信号处理 (SIGWINCH, SIGTSTP, SIGCONT)
 - [x] Monkey patch修复vim兼容性问题
 
 ## 🎮 用户体验设计
@@ -167,6 +168,109 @@ shell-capture/
 6. **返回**: 自动返回正常模式
 
 ## 🔧 技术细节
+
+### 用户按键处理流程
+
+用户按键在shell-capture中经历了复杂的处理流程，需要区分普通字符输入、控制字符和信号：
+
+```mermaid
+graph TD
+    A[用户按键] --> B{键盘输入类型}
+    
+    B -->|字节输入| C[读取stdin原始字节]
+    B -->|信号输入| D[Terminal发送信号]
+    
+    C --> E{检测特殊序列}
+    E -->|Ctrl+E detected| F[进入Capture模式]
+    E -->|普通输入| G[透明转发到PTY]
+    E -->|Enter键优化| H[vim兼容性处理]
+    
+    D --> I{信号类型}
+    I -->|SIGTSTP Ctrl+Y| J[转发到PTY进程组]
+    I -->|SIGCONT fg恢复| K[转发+刷新屏幕]
+    I -->|SIGWINCH 窗口大小| L[调整PTY和屏幕尺寸]
+    
+    F --> M[CaptureUI hint界面]
+    G --> N[Shell处理]
+    H --> N
+    J --> O[Shell处理job control]
+    K --> O
+    L --> P[更新terminal布局]
+    
+    M --> Q[用户选择text]
+    Q --> R[复制到剪贴板]
+    R --> S[返回Normal模式]
+    
+    N --> T[Shell输出]
+    O --> T
+    P --> T
+    T --> U[pyte终端仿真]
+    U --> V[渲染到屏幕]
+    
+    S --> V
+```
+
+### ANSI序列和信号处理详解
+
+#### 1. 字节级输入处理
+```python
+# 检测原始字节输入
+user_input = os.read(sys.stdin.fileno(), 1024)
+
+# 特殊序列检测
+if CAPTURE_HOTKEY in user_input:  # b'\x05' (Ctrl+E)
+    self._enter_capture_mode()
+elif user_input in (b"\n", b"\r", b"\r\n"):  # Enter键处理
+    if self.in_alt_screen:  # vim模式优化
+        processed_input = b"\r"  # LF -> CR 转换
+    self.pty_process.write(processed_input)
+```
+
+#### 2. 信号级处理流程
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant Term as Terminal
+    participant SC as Shell-Capture
+    participant PTY as PTY进程
+    participant Shell as Shell
+    
+    User->>Term: 按Ctrl+Y
+    Term->>SC: 发送SIGTSTP信号
+    
+    Note over SC: signal handler捕获
+    SC->>SC: _handle_sigtstp()
+    SC->>PTY: os.killpg(pid, SIGTSTP)
+    PTY->>Shell: 转发SIGTSTP
+    
+    Note over Shell: Shell处理快捷键<br/>根据自定义配置执行
+    
+    User->>Term: 输入fg %1
+    Term->>SC: 发送SIGCONT信号
+    SC->>SC: _handle_sigcont()
+    SC->>PTY: os.killpg(pid, SIGCONT)
+    PTY->>Shell: 转发SIGCONT
+    Shell->>SC: 恢复输出
+    SC->>SC: _render(full=True)
+    SC->>Term: 刷新屏幕显示
+```
+
+#### 3. 信号优先级设计
+
+**为什么shell快捷键优先级更高？**
+
+1. **Signal Forwarding**: shell-capture不处理job control信号，而是透明转发
+2. **Process Group**: 使用`os.killpg()`确保信号到达整个进程组
+3. **No Self-Suspension**: shell-capture自身不挂起，保持UI响应
+
+```python
+def _handle_sigtstp(self, signum, frame):
+    """透明转发SIGTSTP给shell处理"""
+    if self.pty_process and self.pty_process.isalive():
+        # 转发给PTY进程组，让shell按其配置处理
+        os.killpg(self.pty_process.pid, signal.SIGTSTP)
+    # shell-capture自身不挂起，继续维护UI
+```
 
 ### 快捷键检测实现
 ```python
@@ -248,9 +352,9 @@ def _main_loop(self):
 - **挑战**: 不同终端的特殊处理
 - **解决**: 广泛测试 + 降级方案
 
-### 3. 信号处理
-- **挑战**: 正确传递终端信号
-- **解决**: 完整的信号映射
+### 3. 信号处理 (已解决)
+- **挑战**: 正确传递终端信号，保证shell快捷键优先级
+- **解决**: 透明信号转发机制，使用进程组转发确保shell处理job control
 
 ### 4. 内存管理
 - **挑战**: 长时间运行的内存积累
