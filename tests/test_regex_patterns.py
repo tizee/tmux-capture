@@ -140,12 +140,38 @@ class TestRegexPatterns:
         """Test file path pattern matching."""
         pattern = tmux_capture.REGEX_PATTERNS["FILE_PATH"]
         
-        # Valid file paths
+        # Valid file paths without spaces
         assert re.search(pattern, "/home/user/document.txt") is not None
         assert re.search(pattern, "./relative/path/file.py") is not None
         assert re.search(pattern, "~/Documents/file.pdf") is not None
         assert re.search(pattern, "/usr/local/bin/command") is not None
         assert re.search(pattern, "src/main.rs") is not None
+        
+        # Valid file paths with spaces
+        assert re.search(pattern, "/home/user/My Documents/file.txt") is not None
+        assert re.search(pattern, "./path with spaces/file.py") is not None
+        assert re.search(pattern, "~/Desktop/Project Files/readme.md") is not None
+        assert re.search(pattern, "/Applications/My App.app/Contents/Resources") is not None
+        assert re.search(pattern, "src/test files/main.rs") is not None
+        
+        # Valid paths with multiple consecutive spaces
+        assert re.search(pattern, "/path/with  multiple/spaces") is not None
+        assert re.search(pattern, "./test   spaces/file.txt") is not None
+        
+        # Valid paths with spaces at various positions
+        assert re.search(pattern, "/path/ space at start/file") is not None
+        assert re.search(pattern, "/path/space at end /file") is not None
+        assert re.search(pattern, "/path/ both ends /file") is not None
+        
+        # Complex real-world scenarios
+        assert re.search(pattern, "/Users/john/Library/Application Support/MyApp/config.json") is not None
+        assert re.search(pattern, "C:/Program Files (x86)/Software/app.exe") is not None
+        assert re.search(pattern, "./My Project/src/utils/helper functions.py") is not None
+        
+        # Edge cases with special characters and spaces
+        assert re.search(pattern, "/path/file with @symbol and spaces.txt") is not None
+        assert re.search(pattern, "~/test-folder/file with $var and spaces") is not None
+        assert re.search(pattern, "./folder[test]/file with [brackets] and spaces.log") is not None
         
         # Invalid file paths
         assert re.search(pattern, "just-a-filename") is None
