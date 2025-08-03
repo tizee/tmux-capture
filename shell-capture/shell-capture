@@ -156,7 +156,7 @@ ALPHABETS = {"vim-movement": "hjklasdfqwer", "qwerty-homerow": "asdfjklgh"}
 DEFAULT_ALPHABET = "vim-movement"
 REGEX_PATTERNS = {
     "URL": r"(?:https?://|git@|git://|ssh://|ftp://|file:///)\S+",
-    "FILE_PATH": r"(?:[.\w\-@$~\[\]]+)?(?:/[.\w\-@$\[\]]+)+",
+    "FILE_PATH": r"(?:[.\w\-@$~\[\]:()][.\w\-@$~\[\]:() ]*[.\w\-@$~\[\]:()]|[.\w\-@$~\[\]:()])?(?:/(?:[.\w\-@$~\[\]:()][.\w\-@$~\[\]:() ]*[.\w\-@$~\[\]:()]|[.\w\-@$~\[\]:()]))+",
     "GIT_COMMIT": r"\b[0-9a-f]{7,40}\b",
     "EMAIL": r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
 }

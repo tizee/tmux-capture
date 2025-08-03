@@ -177,6 +177,101 @@ class TestRegexPatterns:
         assert re.search(pattern, "just-a-filename") is None
         assert re.search(pattern, "no-slash-here") is None
     
+    def test_file_path_trimming_behavior(self):
+        """Test that FILE_PATH pattern trims leading and trailing spaces."""
+        pattern = tmux_capture.REGEX_PATTERNS["FILE_PATH"]
+        
+        # Test paths with leading spaces - should NOT match the leading spaces
+        test_cases_leading = [
+            (" /home/user/file.txt", "/home/user/file.txt"),
+            ("  /path/to/file", "/path/to/file"),
+            ("   ./relative/path", "./relative/path"),
+            ("    ~/Documents/test.txt", "~/Documents/test.txt"),
+        ]
+        
+        for input_text, expected_match in test_cases_leading:
+            match = re.search(pattern, input_text)
+            assert match is not None, f"Should match path in: {input_text}"
+            assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
+        
+        # Test paths with trailing spaces - should NOT match the trailing spaces
+        test_cases_trailing = [
+            ("/home/user/file.txt ", "/home/user/file.txt"),
+            ("/path/to/file  ", "/path/to/file"),
+            ("./relative/path   ", "./relative/path"),
+            ("~/Documents/test.txt    ", "~/Documents/test.txt"),
+        ]
+        
+        for input_text, expected_match in test_cases_trailing:
+            match = re.search(pattern, input_text)
+            assert match is not None, f"Should match path in: {input_text}"
+            assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
+        
+        # Test paths with both leading and trailing spaces
+        test_cases_both = [
+            ("  /home/user/file.txt  ", "/home/user/file.txt"),
+            ("   ./path/with spaces/file   ", "./path/with spaces/file"),
+            ("    ~/My Documents/test.pdf    ", "~/My Documents/test.pdf"),
+        ]
+        
+        for input_text, expected_match in test_cases_both:
+            match = re.search(pattern, input_text)
+            assert match is not None, f"Should match path in: {input_text}"
+            assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
+        
+        # Test paths with internal spaces (should still work correctly)
+        test_cases_internal = [
+            "/home/user/My Documents/file.txt",
+            "./path with spaces/another file.py",
+            "~/Desktop/Project Files/readme.md",
+            "/Applications/My App.app/Contents/Resources",
+            "src/test files/main.rs",
+        ]
+        
+        for path in test_cases_internal:
+            match = re.search(pattern, path)
+            assert match is not None, f"Should match path: {path}"
+            assert match.group(0) == path, f"Should match entire path: {path}"
+        
+        # Test edge cases with multiple consecutive spaces
+        test_cases_multi_spaces = [
+            ("   /path/with  multiple/spaces   ", "/path/with  multiple/spaces"),
+            ("  ./test   spaces/file.txt  ", "./test   spaces/file.txt"),
+            ("    ~/folder    with/many   spaces    ", "~/folder    with/many   spaces"),
+        ]
+        
+        for input_text, expected_match in test_cases_multi_spaces:
+            match = re.search(pattern, input_text)
+            assert match is not None, f"Should match path in: {input_text}"
+            assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
+        
+        # Test complex real-world scenarios with trimming
+        test_cases_complex = [
+            ("  /Users/john/Library/Application Support/MyApp/config.json  ", 
+             "/Users/john/Library/Application Support/MyApp/config.json"),
+            ("   C:/Program Files (x86)/Software/app.exe   ", 
+             "C:/Program Files (x86)/Software/app.exe"),
+            ("    ./My Project/src/utils/helper functions.py    ", 
+             "./My Project/src/utils/helper functions.py"),
+        ]
+        
+        for input_text, expected_match in test_cases_complex:
+            match = re.search(pattern, input_text)
+            assert match is not None, f"Should match path in: {input_text}"
+            assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
+        
+        # Test that single character path components work
+        test_cases_single_char = [
+            "/a/b/c",
+            "./x/y/z.txt",
+            "~/a/single char/file.pdf",
+        ]
+        
+        for path in test_cases_single_char:
+            match = re.search(pattern, path)
+            assert match is not None, f"Should match single character path: {path}"
+            assert match.group(0) == path, f"Should match entire path: {path}"
+    
     def test_docker_sha_pattern(self):
         """Test Docker SHA256 pattern matching."""
         pattern = tmux_capture.REGEX_PATTERNS["DOCKER_SHA"]
