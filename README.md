@@ -142,7 +142,7 @@ tmux-capture automatically detects and prioritizes 18 different text patterns:
 - **GitHub repositories**: `https://github.com/user/repo`, `git@github.com:user/repo.git`
 - **IP addresses**: `192.168.1.1`, `10.0.0.1:8080` (with optional port)
 - **IPv6 addresses**: `2001:db8::1`, `::1`
-- **File paths**: `/home/user/file.txt`, `./relative/path`
+- **File paths**: `/home/user/file.txt`, `./relative/path`, `~/path\ with\ spaces/file.txt` (requires escaped spaces)
 - **MAC addresses**: `aa:bb:cc:dd:ee:ff`, `AA-BB-CC-DD-EE-FF`
 - **UUIDs**: `550e8400-e29b-41d4-a716-446655440000`
 - **Hex colors**: `#ff0000`, `#1a2b3c`
@@ -152,6 +152,47 @@ tmux-capture automatically detects and prioritizes 18 different text patterns:
 - **Large numbers**: `12345` (4+ digits)
 - **Markdown links**: `[text](url)` (extracts URL)
 - **Git diff files**: `diff --git a/file b/file`, `--- a/file`, `+++ b/file`
+
+### File Path Handling
+
+**Important**: The file path pattern requires spaces to be escaped with backslashes (`\ `). This ensures accurate path detection and prevents false matches.
+
+**Examples**:
+- ✅ Correct: `~/projects/my\ project/hello\ world/file.txt`
+- ✅ Correct: `/path/to/folder\ with\ spaces/document.pdf`
+- ❌ Incorrect: `~/projects/my project/hello world/file.txt`
+
+**Shell Prompt Configuration**:
+
+To ensure paths with spaces are properly detected, configure your shell prompt to escape spaces automatically:
+
+**Zsh** (`~/.zshrc`):
+```bash
+# Use %~ with proper escaping for path with spaces
+PROMPT='%F{blue}%~%f %# '
+
+# Or use %q modifier to quote special characters
+PROMPT='${(%):-%~} %# '
+```
+
+**Bash** (`~/.bashrc`):
+```bash
+# Use \w with printf %q to escape special characters
+PS1='\[$(printf "%q" "$(pwd | sed "s|$HOME|~|")")\] \$ '
+```
+
+**Fish** (`~/.config/fish/config.fish`):
+```fish
+# Fish automatically handles escaping in prompts
+function fish_prompt
+    set_color blue
+    echo -n (prompt_pwd)
+    set_color normal
+    echo -n ' > '
+end
+```
+
+This ensures that when tmux captures pane content containing your current working directory, spaces are properly escaped and can be selected as complete paths.
 
 ## Overlap Resolution Algorithm
 

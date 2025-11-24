@@ -147,114 +147,132 @@ class TestRegexPatterns:
         assert re.search(pattern, "/usr/local/bin/command") is not None
         assert re.search(pattern, "src/main.rs") is not None
         
-        # Valid file paths with spaces
-        assert re.search(pattern, "/home/user/My Documents/file.txt") is not None
-        assert re.search(pattern, "./path with spaces/file.py") is not None
-        assert re.search(pattern, "~/Desktop/Project Files/readme.md") is not None
-        assert re.search(pattern, "/Applications/My App.app/Contents/Resources") is not None
-        assert re.search(pattern, "src/test files/main.rs") is not None
-        
-        # Valid paths with multiple consecutive spaces
-        assert re.search(pattern, "/path/with  multiple/spaces") is not None
-        assert re.search(pattern, "./test   spaces/file.txt") is not None
-        
-        # Valid paths with spaces at various positions
-        assert re.search(pattern, "/path/ space at start/file") is not None
-        assert re.search(pattern, "/path/space at end /file") is not None
-        assert re.search(pattern, "/path/ both ends /file") is not None
-        
-        # Complex real-world scenarios
-        assert re.search(pattern, "/Users/john/Library/Application Support/MyApp/config.json") is not None
-        assert re.search(pattern, "C:/Program Files (x86)/Software/app.exe") is not None
-        assert re.search(pattern, "./My Project/src/utils/helper functions.py") is not None
-        
-        # Edge cases with special characters and spaces
-        assert re.search(pattern, "/path/file with @symbol and spaces.txt") is not None
-        assert re.search(pattern, "~/test-folder/file with $var and spaces") is not None
-        assert re.search(pattern, "./folder[test]/file with [brackets] and spaces.log") is not None
+        # Valid file paths with escaped spaces
+        assert re.search(pattern, r"/home/user/My\ Documents/file.txt") is not None
+        assert re.search(pattern, r"./path\ with\ spaces/file.py") is not None
+        assert re.search(pattern, r"~/Desktop/Project\ Files/readme.md") is not None
+        assert re.search(pattern, r"/Applications/My\ App.app/Contents/Resources") is not None
+        assert re.search(pattern, r"src/test\ files/main.rs") is not None
+
+        # Valid paths with multiple escaped spaces
+        assert re.search(pattern, r"/path/with\ \ multiple/spaces") is not None
+        assert re.search(pattern, r"./test\ \ \ spaces/file.txt") is not None
+
+        # Valid paths with escaped spaces at various positions
+        assert re.search(pattern, r"/path/\ space\ at\ start/file") is not None
+        assert re.search(pattern, r"/path/space\ at\ end\ /file") is not None
+        assert re.search(pattern, r"/path/\ both\ ends\ /file") is not None
+
+        # Complex real-world scenarios with escaped spaces
+        assert re.search(pattern, r"/Users/john/Library/Application\ Support/MyApp/config.json") is not None
+        assert re.search(pattern, r"C:/Program\ Files\ (x86)/Software/app.exe") is not None
+        assert re.search(pattern, r"./My\ Project/src/utils/helper\ functions.py") is not None
+
+        # Edge cases with special characters and escaped spaces
+        assert re.search(pattern, r"/path/file\ with\ @symbol\ and\ spaces.txt") is not None
+        assert re.search(pattern, r"~/test-folder/file\ with\ $var\ and\ spaces") is not None
+        assert re.search(pattern, r"./folder[test]/file\ with\ [brackets]\ and\ spaces.log") is not None
+
+        # Paths followed by other text (should match only the path)
+        match = re.search(pattern, "~/projects/repo main !2 [insert]")
+        assert match is not None
+        assert match.group(0) == "~/projects/repo"
+
+        match = re.search(pattern, "/home/user/code feature-branch")
+        assert match is not None
+        assert match.group(0) == "/home/user/code"
+
+        # Escaped spaces in actual path components
+        match = re.search(pattern, r"~/projects/hello\ world/file.txt")
+        assert match is not None
+        assert match.group(0) == r"~/projects/hello\ world/file.txt"
+
+        match = re.search(pattern, r"~/projects/hello\ world")
+        assert match is not None
+        assert match.group(0) == r"~/projects/hello\ world"
         
         # Invalid file paths
         assert re.search(pattern, "just-a-filename") is None
         assert re.search(pattern, "no-slash-here") is None
     
     def test_file_path_trimming_behavior(self):
-        """Test that FILE_PATH pattern trims leading and trailing spaces."""
+        """Test that FILE_PATH pattern correctly handles escaped spaces and trims leading/trailing unescaped spaces."""
         pattern = tmux_capture.REGEX_PATTERNS["FILE_PATH"]
-        
-        # Test paths with leading spaces - should NOT match the leading spaces
+
+        # Test paths with leading unescaped spaces - should NOT match the leading spaces
         test_cases_leading = [
             (" /home/user/file.txt", "/home/user/file.txt"),
             ("  /path/to/file", "/path/to/file"),
             ("   ./relative/path", "./relative/path"),
             ("    ~/Documents/test.txt", "~/Documents/test.txt"),
         ]
-        
+
         for input_text, expected_match in test_cases_leading:
             match = re.search(pattern, input_text)
             assert match is not None, f"Should match path in: {input_text}"
             assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
-        
-        # Test paths with trailing spaces - should NOT match the trailing spaces
+
+        # Test paths with trailing unescaped spaces - should NOT match the trailing spaces
         test_cases_trailing = [
             ("/home/user/file.txt ", "/home/user/file.txt"),
             ("/path/to/file  ", "/path/to/file"),
             ("./relative/path   ", "./relative/path"),
             ("~/Documents/test.txt    ", "~/Documents/test.txt"),
         ]
-        
+
         for input_text, expected_match in test_cases_trailing:
             match = re.search(pattern, input_text)
             assert match is not None, f"Should match path in: {input_text}"
             assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
-        
-        # Test paths with both leading and trailing spaces
+
+        # Test paths with both leading and trailing unescaped spaces
         test_cases_both = [
             ("  /home/user/file.txt  ", "/home/user/file.txt"),
-            ("   ./path/with spaces/file   ", "./path/with spaces/file"),
-            ("    ~/My Documents/test.pdf    ", "~/My Documents/test.pdf"),
+            (r"   ./path/with\ spaces/file   ", r"./path/with\ spaces/file"),
+            (r"    ~/My\ Documents/test.pdf    ", r"~/My\ Documents/test.pdf"),
         ]
-        
+
         for input_text, expected_match in test_cases_both:
             match = re.search(pattern, input_text)
             assert match is not None, f"Should match path in: {input_text}"
             assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
-        
-        # Test paths with internal spaces (should still work correctly)
-        test_cases_internal = [
-            "/home/user/My Documents/file.txt",
-            "./path with spaces/another file.py",
-            "~/Desktop/Project Files/readme.md",
-            "/Applications/My App.app/Contents/Resources",
-            "src/test files/main.rs",
+
+        # Test paths with escaped spaces (should match the escaped spaces)
+        test_cases_escaped = [
+            r"/home/user/My\ Documents/file.txt",
+            r"./path\ with\ spaces/another\ file.py",
+            r"~/Desktop/Project\ Files/readme.md",
+            r"/Applications/My\ App.app/Contents/Resources",
+            r"src/test\ files/main.rs",
         ]
-        
-        for path in test_cases_internal:
+
+        for path in test_cases_escaped:
             match = re.search(pattern, path)
             assert match is not None, f"Should match path: {path}"
             assert match.group(0) == path, f"Should match entire path: {path}"
-        
-        # Test edge cases with multiple consecutive spaces
+
+        # Test edge cases with multiple consecutive escaped spaces
         test_cases_multi_spaces = [
-            ("   /path/with  multiple/spaces   ", "/path/with  multiple/spaces"),
-            ("  ./test   spaces/file.txt  ", "./test   spaces/file.txt"),
-            ("    ~/folder    with/many   spaces    ", "~/folder    with/many   spaces"),
+            (r"   /path/with\ \ multiple/spaces   ", r"/path/with\ \ multiple/spaces"),
+            (r"  ./test\ \ \ spaces/file.txt  ", r"./test\ \ \ spaces/file.txt"),
+            (r"    ~/folder\ \ \ \ with/many\ \ \ spaces    ", r"~/folder\ \ \ \ with/many\ \ \ spaces"),
         ]
-        
+
         for input_text, expected_match in test_cases_multi_spaces:
             match = re.search(pattern, input_text)
             assert match is not None, f"Should match path in: {input_text}"
             assert match.group(0) == expected_match, f"Expected '{expected_match}', got '{match.group(0)}'"
-        
-        # Test complex real-world scenarios with trimming
+
+        # Test complex real-world scenarios with escaped spaces and trimming
         test_cases_complex = [
-            ("  /Users/john/Library/Application Support/MyApp/config.json  ", 
-             "/Users/john/Library/Application Support/MyApp/config.json"),
-            ("   C:/Program Files (x86)/Software/app.exe   ", 
-             "C:/Program Files (x86)/Software/app.exe"),
-            ("    ./My Project/src/utils/helper functions.py    ", 
-             "./My Project/src/utils/helper functions.py"),
+            (r"  /Users/john/Library/Application\ Support/MyApp/config.json  ",
+             r"/Users/john/Library/Application\ Support/MyApp/config.json"),
+            (r"   C:/Program\ Files\ (x86)/Software/app.exe   ",
+             r"C:/Program\ Files\ (x86)/Software/app.exe"),
+            (r"    ./My\ Project/src/utils/helper\ functions.py    ",
+             r"./My\ Project/src/utils/helper\ functions.py"),
         ]
-        
+
         for input_text, expected_match in test_cases_complex:
             match = re.search(pattern, input_text)
             assert match is not None, f"Should match path in: {input_text}"
@@ -264,9 +282,9 @@ class TestRegexPatterns:
         test_cases_single_char = [
             "/a/b/c",
             "./x/y/z.txt",
-            "~/a/single char/file.pdf",
+            r"~/a/single\ char/file.pdf",
         ]
-        
+
         for path in test_cases_single_char:
             match = re.search(pattern, path)
             assert match is not None, f"Should match single character path: {path}"
