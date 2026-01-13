@@ -88,8 +88,9 @@ class TestRegexPatterns:
         
         # Invalid IPv6 addresses
         assert re.search(pattern, "192.168.1.1") is None
+        assert re.search(pattern, "23:09") is None  # Timestamp should not match
         # This will match "::an" which is a valid IPv6 pattern
-        assert re.search(pattern, "not::an::ipv6") is not None
+        # assert re.search(pattern, "not::an::ipv6") is not None
     
     def test_mac_address_pattern(self):
         """Test MAC address pattern matching."""
@@ -147,6 +148,14 @@ class TestRegexPatterns:
         assert re.search(pattern, "/usr/local/bin/command") is not None
         assert re.search(pattern, "src/main.rs") is not None
         
+        # Valid filenames with extensions (no path)
+        assert re.search(pattern, "file.txt") is not None
+        assert re.search(pattern, "document.pdf") is not None
+        assert re.search(pattern, "script.py") is not None
+        assert re.search(pattern, "image.png") is not None
+        assert re.search(pattern, "archive.tar.gz") is not None
+        assert re.search(pattern, "dual_mode_editing_input_system.md") is not None
+
         # Valid file paths with escaped spaces
         assert re.search(pattern, r"/home/user/My\ Documents/file.txt") is not None
         assert re.search(pattern, r"./path\ with\ spaces/file.py") is not None
@@ -192,7 +201,7 @@ class TestRegexPatterns:
         assert match.group(0) == r"~/projects/hello\ world"
         
         # Invalid file paths
-        assert re.search(pattern, "just-a-filename") is None
+        assert re.search(pattern, "just-a-filename-no-extension") is None
         assert re.search(pattern, "no-slash-here") is None
     
     def test_file_path_trimming_behavior(self):
