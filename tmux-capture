@@ -142,11 +142,8 @@ def ensure_terminal_control() -> bool:
                 # stdin reports as TTY but doesn't have terminal attributes
                 # This can happen in some virtualized or redirected environments
                 pass
-        else:
-            # stdin is not a TTY at all - cannot establish terminal control
-            return False
 
-        # stdin is a TTY but doesn't have terminal attributes
+        # stdin is not a TTY or lacks terminal attributes (common with uv run)
         # Try to open the controlling terminal directly
         try:
             # Open /dev/tty for both reading and writing

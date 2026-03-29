@@ -225,6 +225,7 @@ version = "0.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "blessed" },
+    { name = "wcwidth" },
 ]
 
 [package.dev-dependencies]
@@ -235,7 +236,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "blessed", specifier = ">=1.21.0" }]
+requires-dist = [
+    { name = "blessed", specifier = ">=1.21.0" },
+    { name = "wcwidth", specifier = ">=0.2.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
