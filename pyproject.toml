@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
     "blessed>=1.21.0",
+    "wcwidth>=0.2.0",
 ]
 
 

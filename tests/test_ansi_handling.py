@@ -314,29 +314,16 @@ class TestAnsiHandling:
         assert "https://github.com/user" in texts  # URL pattern
         
         # Verify that EMAIL and URL patterns won over GITHUB due to higher priority/length
-    def test_find_text_matches_skip_unmappable_start(self, mock_terminal):
-        """Test that matches with unmappable start positions are skipped."""
-        original_func = tmux_capture.calculate_visual_positions
-        try:
-            # Mock calculate_visual_positions to return a cache that is missing a start position
-            def mock_calculate_visual_positions(line, term):
-                # This will match "https://example.com" at visual position 8
-                # but our cache will not have a mapping for position 8
-                if "skip" in line:
-                    return {0:0, 1:1, 2:2, 3:3, 4:4, 5:5, 6:6, 7:7} # Missing position 8
-                return original_func(line, term)
-            
-            tmux_capture.calculate_visual_positions = mock_calculate_visual_positions
-            
-            lines = ["skip me https://example.com"]
-            patterns = {"URL": r"https://[^\s]+"}
-            
-            matches = tmux_capture.find_text_matches(lines, patterns, mock_terminal)
-            
-            # The match for "https://example.com" should be skipped because its start is unmappable
-            assert len(matches) == 0
-            
-        finally:
-            # Restore original function
-            tmux_capture.calculate_visual_positions = original_func
+    def test_find_text_matches_all_positions_mapped(self, mock_terminal):
+        """Test that all clean-line positions are mapped correctly."""
+        lines = ["skip me https://example.com"]
+        patterns = {"URL": r"https://[^\s]+"}
+
+        matches = tmux_capture.find_text_matches(lines, patterns, mock_terminal)
+
+        # The new array-based mapping handles all positions correctly
+        assert len(matches) == 1
+        assert matches[0]["text"] == "https://example.com"
+        assert matches[0]["start_col"] == 8
+        assert matches[0]["original_styled_segment"] == "https://example.com"
 

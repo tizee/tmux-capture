@@ -3,7 +3,7 @@
 
 # Set the path to your tmux-capture-window.sh script
 # Update this path to match your actual installation location
-TMUX_CAPTURE_SCRIPT="/Users/tizee/projects/project-python/tizee-packages/tmux-capture/tmux-capture-window.sh"
+TMUX_CAPTURE_SCRIPT="/path/to/tmux-capture/scripts/capture.sh"
 
 # Bind key combination to launch capture in new window
 # This binds Prefix + y to launch the capture tool

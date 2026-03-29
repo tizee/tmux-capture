@@ -2,6 +2,7 @@
 # /// script
 # dependencies = [
 #   "blessed >= 1.21.0",
+#   "wcwidth >= 0.2.0",
 # ]
 # ///
 """
@@ -43,6 +44,7 @@ import termios
 import tty
 from itertools import product, islice
 import blessed
+import wcwidth
 from typing import Dict, List, Tuple, Optional
 
 
@@ -196,6 +198,16 @@ def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
 
+def char_display_width(ch: str) -> int:
+    """Return the display width of a single character using wcwidth.
+
+    CJK characters occupy 2 columns, most others occupy 1.
+    Control characters and zero-width characters return 0.
+    """
+    w = wcwidth.wcwidth(ch)
+    return w if w >= 0 else 1
+
+
 def calculate_visual_positions(
     line_with_ansi: str, term: blessed.Terminal
 ) -> dict[int, int]:
@@ -204,6 +216,8 @@ def calculate_visual_positions(
     ANSI escape sequences don't occupy visual space but do take up character positions.
     This function creates a mapping to convert between visual positions (for display)
     and raw character indices (for text extraction).
+
+    Uses wcwidth for accurate display width of CJK and other wide characters.
 
     Args:
         line_with_ansi: Raw line string containing ANSI escape sequences
@@ -228,7 +242,7 @@ def calculate_visual_positions(
 
         # Map visual position to character index for visible characters
         visual_pos_cache[visual_col] = char_idx
-        visual_col += term.length(line_with_ansi[char_idx : char_idx + 1])
+        visual_col += char_display_width(char)
         char_idx += 1
 
     return visual_pos_cache
@@ -403,13 +417,54 @@ def _resolve_overlapping_matches(matches: list[dict]) -> list[dict]:
     return result
 
 
+def _build_clean_to_ansi_mapping(
+    line_with_ansi: str,
+) -> tuple[list[int], list[int]]:
+    """Build mappings from clean-line char indices to ANSI-line char indices and display columns.
+
+    Walks the ANSI line, skipping escape sequences, and builds two parallel arrays
+    indexed by clean-line character position:
+      - clean_to_ansi[i]: char index in the ANSI line for clean char i
+      - clean_to_display[i]: display column (accounting for CJK width) for clean char i
+
+    Also appends a sentinel entry at index len(clean_line) for end-of-match lookups.
+
+    Returns:
+        (clean_to_ansi, clean_to_display) tuple of lists
+    """
+    clean_to_ansi = []
+    clean_to_display = []
+    visual_col = 0
+    char_idx = 0
+
+    while char_idx < len(line_with_ansi):
+        char = line_with_ansi[char_idx]
+        if char == "\x1b":
+            match = re.match(r"\x1b\[[0-9;]*m", line_with_ansi[char_idx:])
+            if match:
+                char_idx += len(match.group(0))
+                continue
+
+        clean_to_ansi.append(char_idx)
+        clean_to_display.append(visual_col)
+        visual_col += char_display_width(char)
+        char_idx += 1
+
+    # Sentinel for end-of-line lookups
+    clean_to_ansi.append(len(line_with_ansi))
+    clean_to_display.append(visual_col)
+
+    return clean_to_ansi, clean_to_display
+
+
 def find_text_matches(
     lines_with_ansi: list[str], patterns: dict[str, str], term: blessed.Terminal
 ) -> list[dict]:
     """Find all text pattern matches in tmux pane lines.
 
     Searches for regex patterns in ANSI-stripped lines while preserving
-    the original styled segments for display purposes.
+    the original styled segments for display purposes. Uses display-width
+    positions (accounting for CJK double-width characters) for overlay alignment.
 
     Args:
         lines_with_ansi: List of raw lines with ANSI escape sequences
@@ -417,7 +472,8 @@ def find_text_matches(
         term: blessed.Terminal instance for ANSI processing
 
     Returns:
-        List of match dictionaries with text, position, and styling info
+        List of match dictionaries with text, position, and styling info.
+        start_col and end_col are display column positions (for term.move_xy).
     """
     found_matches = []
 
@@ -426,34 +482,34 @@ def find_text_matches(
             line_with_ansi
         )  # Remove ANSI sequences for pattern matching
 
-        # Create mapping from visual column positions to character indices
-        visual_pos_cache = calculate_visual_positions(line_with_ansi, term)
+        # Build mappings from clean-line char index to ANSI index and display column
+        clean_to_ansi, clean_to_display = _build_clean_to_ansi_mapping(
+            line_with_ansi
+        )
 
         # Search for all regex patterns in the cleaned line
         for pattern_name, pattern_str in patterns.items():
             for m in re.finditer(pattern_str, clean_line):
-                start_col, end_col = m.start(), m.end()
+                char_start, char_end = m.start(), m.end()
 
-                # Map visual positions back to raw character indices
-                ansi_start_idx = visual_pos_cache.get(start_col)
-                ansi_end_idx = visual_pos_cache.get(end_col)
-                if ansi_end_idx is None:
-                    # If end position not found, use end of line
-                    ansi_end_idx = visual_pos_cache.get(
-                        len(clean_line), len(line_with_ansi)
-                    )
+                if char_start >= len(clean_to_ansi) or char_end > len(clean_to_ansi):
+                    continue  # Skip if positions are out of bounds
 
-                if ansi_start_idx is None:
-                    continue  # Skip if start position not found
+                # Convert to display columns for overlay positioning
+                display_start = clean_to_display[char_start]
+                display_end = clean_to_display[char_end]
 
-                # Extract original segment with ANSI formatting preserved
-                original_styled_segment = line_with_ansi[ansi_start_idx:ansi_end_idx]
+                # Convert to ANSI char indices for styled segment extraction
+                ansi_start = clean_to_ansi[char_start]
+                ansi_end = clean_to_ansi[char_end]
+
+                original_styled_segment = line_with_ansi[ansi_start:ansi_end]
                 found_matches.append(
                     {
                         "text": m.group(0),
                         "line_idx": line_idx,
-                        "start_col": start_col,
-                        "end_col": end_col,
+                        "start_col": display_start,
+                        "end_col": display_end,
                         "pattern": pattern_name,
                         "original_styled_segment": original_styled_segment,
                     }
@@ -794,12 +850,31 @@ def run_blessed_app(
             # Display only the content that fits in the terminal
             for line_idx, line in enumerate(visible_content):
                 if line_idx < term.height:
-                    # Truncate line if it's too wide for terminal
-                    truncated_line = (
-                        line[: term.width]
-                        if len(term.strip_seqs(line)) > term.width
-                        else line
-                    )
+                    # Truncate line by display width (handles CJK double-width)
+                    clean = term.strip_seqs(line)
+                    display_w = sum(char_display_width(c) for c in clean)
+                    if display_w > term.width:
+                        # Walk the ANSI line, counting display width, and cut at term.width
+                        out = []
+                        col = 0
+                        i = 0
+                        while i < len(line):
+                            ch = line[i]
+                            if ch == "\x1b":
+                                seq = re.match(r"\x1b\[[0-9;]*m", line[i:])
+                                if seq:
+                                    out.append(seq.group(0))
+                                    i += len(seq.group(0))
+                                    continue
+                            cw = char_display_width(ch)
+                            if col + cw > term.width:
+                                break
+                            out.append(ch)
+                            col += cw
+                            i += 1
+                        truncated_line = "".join(out)
+                    else:
+                        truncated_line = line
                     print(term.move_xy(0, line_idx) + truncated_line, end="")
 
             # Draw all matches with highlights and hints
