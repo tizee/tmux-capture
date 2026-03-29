@@ -8,21 +8,14 @@
 
 # Get the directory where this script is located
 TMUX_CAPTURE_DIR="${0:A:h}"
-TMUX_CAPTURE_SCRIPT="$TMUX_CAPTURE_DIR/tmux-capture"
+TMUX_CAPTURE_SCRIPT="$TMUX_CAPTURE_DIR/scripts/capture.sh"
 
 # Function to launch tmux-capture
 tmux-capture-widget() {
     # Check if we're in a tmux session
     if [[ -n "$TMUX" ]]; then
-        # Inside tmux - use the window script for better integration
-        # Show output and wait for user confirmation in tmux environment
-        local window_script="$TMUX_CAPTURE_DIR/tmux-capture-window.sh"
-        if [[ -f "$window_script" ]]; then
-            "$window_script"
-        else
-            # Fallback to direct execution
-            "$TMUX_CAPTURE_SCRIPT"
-        fi
+        # Inside tmux - use the popup script
+        "$TMUX_CAPTURE_SCRIPT"
     else
         # Outside tmux - check if tmux is running and has sessions
         if ! command -v tmux >/dev/null 2>&1; then
@@ -45,11 +38,11 @@ tmux-capture-widget() {
         fi
 
         if [[ -n "$current_session" ]]; then
-            # Get the current window and pane of the session
+            # Get the current pane of the session
             local current_pane=$(tmux list-panes -t "$current_session" -F '#{pane_id}' | head -1)
             if [[ -n "$current_pane" ]]; then
-                # tmux-capture now has native terminal control - no redirection needed
-                "$TMUX_CAPTURE_SCRIPT" "$current_pane"
+                tmux display-popup -E -w 100% -h 100% \
+                    "cd '$TMUX_CAPTURE_DIR' && uv run --script '$TMUX_CAPTURE_DIR/tmux-capture' '$current_pane'"
             else
                 echo "Error: No panes found in tmux session '$current_session'"
                 return 1

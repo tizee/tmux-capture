@@ -17,7 +17,6 @@ CURRENT_PANE=$(tmux display-message -p "#{pane_id}")
 
 # Use display-popup to overlay the capture interface
 # -E: execute the command
-# -w/h: size (90% of viewport)
-# -b "heavy": border style
-tmux display-popup -E -w 90% -h 90% -b "heavy" \
+# -w/h: size (100% of viewport)
+tmux display-popup -E -w 100% -h 100% \
     "cd '$CURRENT_DIR' && uv run --script '$CAPTURE_SCRIPT' '$CURRENT_PANE'"
