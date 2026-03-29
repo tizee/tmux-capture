@@ -35,19 +35,68 @@ tmux-capture solves these issues by:
 
 ## Installation
 
+### TPM (Tmux Plugin Manager) - Recommended
+
+1. Add the plugin to your `~/.tmux.conf`:
+   ```bash
+   set -g @plugin 'tizee/tmux-capture'
+   ```
+
+2. Press `Prefix + I` in tmux to install the plugin
+
+3. Configure your keybinding (see [Configuration](#configuration) below)
+
+### Manual Installation
+
 1. Clone or download this repository
 2. Install uv if not already installed:
    ```bash
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
-3. Run the installation script:
+3. Add keybinding to your `~/.tmux.conf`:
    ```bash
-   ./install.sh
+   bind-key y run-shell '/path/to/tmux-capture/scripts/capture.sh'
    ```
 4. Reload tmux configuration:
    ```bash
    tmux source-file ~/.tmux.conf
    ```
+
+## Configuration
+
+### Keybinding
+
+**No preset keybinding is provided.** You must configure your own keybinding.
+
+Add to your `~/.tmux.conf`:
+
+```bash
+# With prefix (recommended)
+bind-key y run-shell '/path/to/tmux-capture/scripts/capture.sh'
+
+# Without prefix (global hotkey)
+bind-key -n M-y run-shell '/path/to/tmux-capture/scripts/capture.sh'
+
+# Ctrl + prefix
+bind-key C-y run-shell '/path/to/tmux-capture/scripts/capture.sh'
+```
+
+### Keybinding via TPM Plugin
+
+If using TPM with `@plugin` syntax, you can customize the keybinding:
+
+```bash
+# Default is 'y' (Prefix + y), override if needed
+set -g @tmux-capture-key 'u'
+```
+
+The plugin will automatically bind `Prefix + <key>` based on this option.
+
+### Available Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `@tmux-capture-key` | `y` | Keybinding for capture (e.g., `y`, `u`, `c`) |
 
 ## CLI Integration
 
@@ -122,14 +171,7 @@ python3 tmux-capture
 
 ## Key Bindings
 
-Default binding: `Prefix + y`
-
-To customize, edit your `~/.tmux.conf`:
-```bash
-# Use different key combination
-bind-key C-y run-shell '/path/to/tmux-capture-window.sh'  # Prefix + Ctrl+y
-bind-key -n M-y run-shell '/path/to/tmux-capture-window.sh'  # Alt+y (no prefix)
-```
+**Note:** No preset keybinding is provided. See [Configuration](#configuration) above to set up your own.
 
 ## Pattern Recognition
 
@@ -211,7 +253,7 @@ The algorithm applies the following rules in order:
    ```
    Priority levels (1 = highest, 20 = lowest):
    - EMAIL, URL: 1 (highest priority)
-   - GITHUB_REPO: 2  
+   - GITHUB_REPO: 2
    - GIT_COMMIT: 3
    - UUID: 4
    - IP_ADDRESS, IPV6: 5
@@ -242,7 +284,7 @@ Input: "Contact user@github.com or visit https://github.com/user"
 
 Without overlap resolution:
 - "user@github.com" (EMAIL)
-- "github.com" (partial GITHUB pattern)  
+- "github.com" (partial GITHUB pattern)
 - "https://github.com/user" (URL)
 
 With overlap resolution:
